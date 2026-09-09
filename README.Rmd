@@ -101,9 +101,10 @@ The package is published through the
 [RGenomicsETL r-universe](https://rgenomicsetl.r-universe.dev/CanardAbsurd).
 A source checkout can also be installed with `R CMD INSTALL .`.
 
-Quack is a separate DuckDB extension. Install it explicitly for the DuckDB
-runtime used by R before running server/client examples. In this checkout,
-`make quack` performs that installation.
+The workflow SQL requires DuckDB's JSON extension; remote access also requires
+Quack. Before running the examples, `make quack` explicitly installs both for the
+R DuckDB runtime and creates `~/.duckdb` so they persist across R processes.
+The package itself never downloads extensions.
 
 ## The recovery contract
 

@@ -19,6 +19,6 @@ Suggests: callr, tinytest, roxygen2, s7contract (>= 0.2.1), withr,
 VignetteBuilder: knitr
 Config/Needs/website: pkgdown, litedown
 Roxygen: list(markdown = TRUE)
-SystemRequirements: The Quack extension matching the installed DuckDB runtime
-    (required for remote clients and database hosting)
+SystemRequirements: The JSON extension matching the installed DuckDB runtime;
+    the matching Quack extension for remote clients and database hosting
 Config/roxygen2/version: 8.0.0

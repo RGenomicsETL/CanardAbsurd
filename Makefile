@@ -11,7 +11,7 @@ install:
 	$(R) CMD INSTALL --library=artifacts/library .
 
 quack:
-	$(RSCRIPT) --vanilla -e 'con <- DBI::dbConnect(duckdb::duckdb()); DBI::dbExecute(con, "INSTALL quack"); DBI::dbDisconnect(con, shutdown = TRUE)'
+	$(RSCRIPT) --vanilla tools/install-extensions.R
 
 readme: install
 	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-readme.R

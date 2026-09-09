@@ -31,11 +31,9 @@ jobs:
           extra-repositories: https://sounkou-bioinfo.r-universe.dev
       - uses: r-lib/actions/setup-r-dependencies@465b7d8e732ca3921382b1674c59bada9cbf3399 # v2
         with:
-          extra-packages: |
-            any::duckdb@1.5.3
-            local::.
+          extra-packages: local::.
           needs: website
-      - name: Install Quack explicitly
+      - name: Install JSON and Quack explicitly
         run: make quack
       - name: Evaluate README and build litedown and pkgdown pages
         run: make docs
