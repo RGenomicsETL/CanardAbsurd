@@ -1,0 +1,11 @@
+^\.git$
+^\.gitignore$
+^\.pi$
+^AGENTS\.md$
+^Makefile$
+^LICENSE$
+^LICENSE\.md$
+^tools$
+^artifacts$
+^.*\.Rcheck$
+^CanardAbsurd_.*\.tar\.gz$

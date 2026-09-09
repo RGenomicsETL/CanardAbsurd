@@ -1,0 +1,7 @@
+.Rhistory
+.RData
+.Rproj.user/
+.pi/
+artifacts/
+*.Rcheck/
+*.tar.gz

@@ -1,0 +1,19 @@
+R ?= R
+RSCRIPT ?= Rscript
+
+.PHONY: document install test check
+
+document:
+	$(RSCRIPT) --vanilla -e 'roxygen2::roxygenise()'
+
+install:
+	mkdir -p artifacts/library
+	$(R) CMD INSTALL --library=artifacts/library .
+
+test: install
+	R_LIBS="$(CURDIR)/artifacts/library" CANARDABSURD_REQUIRE_QUACK=true $(RSCRIPT) --vanilla -e 'library(CanardAbsurd); tinytest::test_package("CanardAbsurd")'
+
+check:
+	mkdir -p artifacts
+	cd artifacts && $(R) CMD build ..
+	cd artifacts && CANARDABSURD_REQUIRE_QUACK=true $(R) CMD check --no-manual CanardAbsurd_*.tar.gz
