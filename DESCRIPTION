@@ -1,10 +1,11 @@
 Package: CanardAbsurd
-Title: Checkpointed R Workflows over DuckDB and Quack
+Title: Checkpointed R Workflows over 'DuckDB' and 'Quack'
 Version: 0.0.1
 Authors@R: person("Sounkou Mahamane", "Toure", email = "sounkoutoure@gmail.com",
     role = c("aut", "cre"))
-Description: Runs durable R tasks using DuckDB for state and the Quack extension
-    for remote SQL access. Provides database hosting, leased task claims,
+Description: Runs durable R tasks using 'DuckDB' for state and the 'Quack'
+    extension for remote Structured Query Language (SQL) access. Provides
+    database hosting, leased task claims,
     checkpoint replay, retries, durable sleeps, and a pull-based R worker.
     External side effects require application-level idempotency.
 License: GPL (>= 2)
@@ -18,6 +19,7 @@ Suggests: callr, tinytest, roxygen2, s7contract (>= 0.2.1), withr,
     knitr, rmarkdown, parallelly
 VignetteBuilder: knitr
 Config/Needs/website: pkgdown, litedown
+Config/Needs/graphics: rsvg
 Roxygen: list(markdown = TRUE)
 SystemRequirements: The JSON extension matching the installed DuckDB runtime;
     the matching Quack extension for remote clients and database hosting

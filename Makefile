@@ -1,7 +1,7 @@
 R ?= R
 RSCRIPT ?= Rscript
 
-.PHONY: document install test check quack readme site docs
+.PHONY: document install test check quack logo readme site docs
 
 document:
 	$(RSCRIPT) --vanilla -e 'roxygen2::roxygenise()'
@@ -12,6 +12,9 @@ install:
 
 quack:
 	$(RSCRIPT) --vanilla tools/install-extensions.R
+
+logo:
+	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-logo.R
 
 readme: install
 	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-readme.R

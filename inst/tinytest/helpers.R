@@ -16,7 +16,7 @@ wait_until <- function(predicate, timeout = 15) {
 local_quack <- function(.local_envir = parent.frame()) {
   directory <- tempfile("canard-quack-")
   dir.create(directory)
-  uri <- paste0("quack:127.0.0.1:", sample.int(20000L, 1L) + 30000L)
+  uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
   server <- callr::r_bg(function(directory, uri) {
     library(CanardAbsurd)
     db <- ca_serve(file.path(directory, "tasks.duckdb"), uri, token = "test-token")

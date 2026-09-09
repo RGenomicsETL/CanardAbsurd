@@ -3,7 +3,10 @@
 pkgdown::build_site(new_process = FALSE, install = FALSE, preview = FALSE)
 
 readme <- readLines("README.md", warn = FALSE, encoding = "UTF-8")
-readme <- readme[readme != "# CanardAbsurd"]
+readme <- sub("# CanardAbsurd", "", readme, fixed = TRUE)
+readme <- sub('src="man/figures/logo.png"',
+  paste0('src="', normalizePath("man/figures/logo.png", winslash = "/"), '"'),
+  readme, fixed = TRUE)
 metadata <- c(
   "---",
   "title: CanardAbsurd",

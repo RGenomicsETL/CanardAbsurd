@@ -1,8 +1,10 @@
 library(CanardAbsurd)
 source(system.file("tinytest", "helpers.R", package = "CanardAbsurd"), local = TRUE)
 
-if (!requireNamespace("callr", quietly = TRUE) || !requireNamespace("withr", quietly = TRUE)) {
-  exit_file("Quack process tests require callr and withr")
+if (!requireNamespace("callr", quietly = TRUE) ||
+    !requireNamespace("withr", quietly = TRUE) ||
+    !requireNamespace("parallelly", quietly = TRUE)) {
+  exit_file("Quack process tests require callr, withr, and parallelly")
 }
 quack_installed <- local({
   con <- DBI::dbConnect(duckdb::duckdb(),

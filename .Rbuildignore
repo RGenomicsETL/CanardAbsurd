@@ -6,6 +6,7 @@
 ^README\.html$
 ^README_files$
 ^_pkgdown\.yml$
+^pkgdown$
 ^vignettes/articles$
 ^AGENTS\.md$
 ^Makefile$

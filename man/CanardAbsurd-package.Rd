@@ -11,6 +11,15 @@ checkpoint model is inspired by Absurd (\url{https://github.com/earendil-works/a
 See \code{\link[=ca_serve]{ca_serve()}} for hosting, \code{\link[=ca_connect]{ca_connect()}} for remote access, \code{\link[=ca_work]{ca_work()}} for
 workers, and \code{\link[=ca_step]{ca_step()}} for replay semantics.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://rgenomicsetl.github.io/CanardAbsurd/}
+  \item \url{https://github.com/RGenomicsETL/CanardAbsurd}
+  \item Report bugs at \url{https://github.com/RGenomicsETL/CanardAbsurd/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Sounkou Mahamane Toure \email{sounkoutoure@gmail.com}
 

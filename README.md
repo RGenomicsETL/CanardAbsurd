@@ -1,10 +1,10 @@
 
 <!-- README.md is generated from README.Rmd. Edit README.Rmd. -->
 
-# CanardAbsurd
+# CanardAbsurd <img src="man/figures/logo.png" align="right" width="140" alt="CanardAbsurd hex sticker: Ce n’est pas un canard." />
 
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
-[![r-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
+[r-universe](https://rgenomicsetl.r-universe.dev/)
 
 **Durable R workflows. DuckDB owns the state; Quack serves it.**
 
@@ -103,9 +103,9 @@ owns `ca_serve()`; independent worker processes use `ca_connect()` and
 
 ## Install
 
-The package is published through the [RGenomicsETL
-r-universe](https://rgenomicsetl.r-universe.dev/CanardAbsurd). A source
-checkout can also be installed with `R CMD INSTALL .`.
+The package is registered with the [RGenomicsETL
+r-universe](https://rgenomicsetl.r-universe.dev/). Install a source
+checkout with `R CMD INSTALL .`.
 
 The workflow SQL requires DuckDB’s JSON extension; remote access also
 requires Quack. Before running the examples, `make quack` explicitly
