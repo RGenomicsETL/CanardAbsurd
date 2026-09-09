@@ -8,6 +8,9 @@ CanardAbsurd ships a DuckDB workflow state machine and a thin R client. Quack ow
 - `R/`: lifecycle, input admission, SQL interpolation, JSON conversion, and handler replay.
 - `inst/tinytest/`: local and real Quack behavior, including competing R processes. Use `s7contract` for behavioral laws where appropriate.
 - Roxygen comments generate `man/` and `NAMESPACE`.
+- `README.Rmd` is evaluated into `README.md`; litedown renders that Markdown as the site landing page. Do not edit the generated README.
+- `vignettes/*.Rmd` are evaluated offline package guides. `vignettes/articles/*.Rmd` are evaluated Quack-dependent site articles. All R chunks execute; no disabled demonstrations or invented results.
+- `_pkgdown.yml` owns the API/reference site; `tools/build-site.R` composes pkgdown and the litedown landing page.
 
 ## Invariants
 
@@ -21,4 +24,4 @@ CanardAbsurd ships a DuckDB workflow state machine and a thin R client. Quack ow
 
 ## Validation
 
-Run `make document`, `make test`, and `make check`, followed by the Tree-sitter anti-slop audit. The integration tests must exercise installed package artifacts and independent R processes. Keep build output under `artifacts/`. Preserve the separately developed examples in `~/ducknng`.
+Run `make document`, `make test`, and `make check`, followed by the Tree-sitter anti-slop audit. Documentation changes require `make docs`; install Quack explicitly with `make quack` when needed. The integration tests must exercise installed package artifacts and independent R processes. Keep build output under `artifacts/`. Preserve the separately developed examples in `~/ducknng`.

@@ -1,0 +1,82 @@
+---
+title: "A Quack server and R workers"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE, comment = "#>", error = FALSE)
+library(CanardAbsurd)
+```
+
+One process owns the writable DuckDB file. Quack exposes remote SQL access;
+clients use their own in-memory DuckDB connection to reach it. R handlers execute
+in those clients, not in server callbacks.
+
+This article starts a real temporary server and executes a worker over Quack.
+All R chunks run during the site build. Quack must be explicitly installed for
+the R DuckDB runtime before rendering; `make quack` provides that setup in this
+checkout. This network-dependent article is built by pkgdown, while the package
+vignettes run offline.
+
+## Run the server/client path
+
+The demonstration uses a disposable localhost token. Use a securely supplied
+nonempty token and a controlled network address for a deployment.
+
+```{r server-worker}
+local({
+  path <- tempfile(fileext = ".duckdb")
+  on.exit(unlink(c(path, paste0(path, ".wal"))), add = TRUE)
+  uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
+
+  server <- ca_serve(path, uri, token = "article-local-only")
+  on.exit(ca_close(server), add = TRUE, after = FALSE)
+  producer <- ca_connect(uri, token = "article-local-only")
+  on.exit(ca_close(producer), add = TRUE, after = FALSE)
+  worker <- ca_connect(uri, token = "article-local-only")
+  on.exit(ca_close(worker), add = TRUE, after = FALSE)
+
+  id <- ca_spawn(producer, "sum", list(values = list(10, 20, 12)),
+                 id = "remote-sum-001", queue = "reports")
+  handlers <- list(sum = function(input, ctx) {
+    ca_step(ctx, "sum", function() sum(unlist(input$values)))
+  })
+  ca_work(worker, handlers, queue = "reports", max_tasks = 1)
+
+  task <- ca_inspect(producer, id)
+  stopifnot(task$state == "completed", task$result == 42)
+  list(runtime = ca_runtime(worker), state = task$state, result = task$result)
+})
+```
+
+These are independent database connections in one R process, communicating
+through a real Quack endpoint. The `tinytest` suite also executes workers in
+independent R processes and kills worker and database-host processes to test
+recovery.
+
+## Deploy across processes
+
+Use the same `ca_serve()` call in a long-lived server R process, with a persistent
+database path. The process must remain alive to serve requests. Worker processes
+call `ca_connect()` with that endpoint and token, register their handler lists,
+and enter `ca_work()`.
+
+Each worker executes one attempt at a time. `lease_seconds` must cover the time
+between step boundaries or explicit heartbeats. `poll_seconds` controls idle
+polling, and `idle_timeout` controls when an idle worker returns. A worker that
+only knows one handler will not claim other task names.
+
+## Inspect and stop
+
+`ca_inspect()` reports state, attempts, failures, available time, owner, and lease
+deadline. `ca_runtime()` reports the executing server's versions. `ca_close()`
+closes a client; closing the server handle stops its endpoint and closes the file.
+
+Keep handles process-local. Give package operations their dedicated connections
+rather than wrapping them in externally managed transactions.
+
+## Protect the endpoint
+
+The token grants trusted database access, not per-queue tenant isolation. Use
+network restrictions and TLS at authenticated ingress for non-local deployments.
+Do not expose an unprotected Quack server to the internet. Package loading and
+connections never install extensions; extension acquisition is explicit setup.

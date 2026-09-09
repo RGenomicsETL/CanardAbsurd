@@ -5,3 +5,7 @@
 artifacts/
 *.Rcheck/
 *.tar.gz
+README.html
+README_files/
+vignettes/*.html
+vignettes/*.R

@@ -1,0 +1,117 @@
+---
+title: "Getting started"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE, comment = "#>", error = FALSE)
+library(CanardAbsurd)
+```
+
+A workflow is an R function taking `(input, ctx)`. `ca_spawn()` stores its name
+and JSON input; `ca_work()` finds the corresponding function in a named list.
+
+This guide uses an in-memory database. All examples execute during rendering,
+without network access or a Quack installation. The same workflow functions run
+against a remote connection made with `ca_connect()`.
+
+## Run a task
+
+```{r first-task}
+local({
+  db <- ca_open()
+  on.exit(ca_close(db))
+
+  id <- ca_spawn(db, "total", list(amount = 20, tax = 2), id = "order-001")
+  handlers <- list(total = function(input, ctx) {
+    ca_step(ctx, "calculate", function() input$amount + input$tax)
+  })
+
+  ca_work(db, handlers, max_tasks = 1)
+  task <- ca_inspect(db, id)
+  stopifnot(task$state == "completed", task$result == 22)
+  list(state = task$state, result = task$result)
+})
+```
+
+The stable ID also makes submission idempotent: submitting the same name, input,
+queue, priority, and failure budget under that ID returns the existing task.
+Different input under that ID raises `canard_spawn_conflict`. JSON object key
+order is part of submission equality.
+
+## Replay after a failure
+
+The first step below completes once. The second step fails on its first call,
+so the worker retries the handler. The saved first step is replayed.
+
+```{r replay}
+local({
+  db <- ca_open()
+  on.exit(ca_close(db))
+  calls <- c(prepare = 0L, deliver = 0L)
+
+  handler <- function(input, ctx) {
+    value <- ca_step(ctx, "prepare", function() {
+      calls[["prepare"]] <<- calls[["prepare"]] + 1L
+      input$value * 2
+    })
+    ca_step(ctx, "deliver", function() {
+      calls[["deliver"]] <<- calls[["deliver"]] + 1L
+      if (calls[["deliver"]] == 1L) stop("temporary failure")
+      value
+    })
+  }
+
+  id <- ca_spawn(db, "replay", list(value = 21), id = "replay-001")
+  ca_work(db, list(replay = handler), idle_timeout = 0)
+  task <- ca_inspect(db, id)
+  stopifnot(task$state == "completed", task$result == 42,
+            identical(calls, c(prepare = 1L, deliver = 2L)))
+  data.frame(state = task$state, attempts = task$attempt,
+             failures = task$failures, prepare_calls = calls[["prepare"]],
+             deliver_calls = calls[["deliver"]], result = task$result)
+})
+```
+
+The local counters expose which callbacks ran; they are not durable workflow
+state. Actual durable results live in the database.
+
+## Sleep without occupying a worker
+
+`ca_sleep()` saves its checkpoint and releases the claim. The resumed handler
+passes that named sleep without scheduling it again.
+
+```{r sleep}
+local({
+  db <- ca_open()
+  on.exit(ca_close(db))
+  id <- ca_spawn(db, "pause", max_failures = 1)
+  handler <- function(input, ctx) {
+    ca_sleep(ctx, "pause", seconds = 0)
+    "resumed"
+  }
+
+  ca_work(db, list(pause = handler), max_tasks = 2)
+  task <- ca_inspect(db, id)
+  stopifnot(task$result == "resumed", task$attempt == 2L, task$failures == 0L)
+  list(result = task$result, attempts = task$attempt, failures = task$failures)
+})
+```
+
+A zero-second sleep demonstrates the state transition without delaying the
+render. Positive durations use the database clock. Sleeps do not consume the
+failure budget.
+
+## Choose a worker lifetime
+
+- `max_tasks = 1` executes one claimed attempt, including a failure or suspension.
+- `idle_timeout = 0` drains work that is currently eligible.
+- The defaults keep polling until the worker is interrupted.
+
+Each worker runs one attempt at a time. For concurrency, run independent R
+processes connected to a Quack server. Only names present in `handlers` are
+claimed. See the [Quack server guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html).

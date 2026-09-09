@@ -1,6 +1,12 @@
 ^\.git$
 ^\.gitignore$
 ^\.pi$
+^\.github$
+^README\.Rmd$
+^README\.html$
+^README_files$
+^_pkgdown\.yml$
+^vignettes/articles$
 ^AGENTS\.md$
 ^Makefile$
 ^LICENSE$

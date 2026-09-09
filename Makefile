@@ -1,7 +1,7 @@
 R ?= R
 RSCRIPT ?= Rscript
 
-.PHONY: document install test check
+.PHONY: document install test check quack readme site docs
 
 document:
 	$(RSCRIPT) --vanilla -e 'roxygen2::roxygenise()'
@@ -9,6 +9,17 @@ document:
 install:
 	mkdir -p artifacts/library
 	$(R) CMD INSTALL --library=artifacts/library .
+
+quack:
+	$(RSCRIPT) --vanilla -e 'con <- DBI::dbConnect(duckdb::duckdb()); DBI::dbExecute(con, "INSTALL quack"); DBI::dbDisconnect(con, shutdown = TRUE)'
+
+readme: install
+	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-readme.R
+
+site: install
+	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/build-site.R
+
+docs: readme site
 
 test: install
 	R_LIBS="$(CURDIR)/artifacts/library" CANARDABSURD_REQUIRE_QUACK=true $(RSCRIPT) --vanilla -e 'library(CanardAbsurd); tinytest::test_package("CanardAbsurd")'

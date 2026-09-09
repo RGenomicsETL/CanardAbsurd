@@ -1,103 +1,155 @@
+
+<!-- README.md is generated from README.Rmd. Edit README.Rmd. -->
+
 # CanardAbsurd
 
-Durable R workflows with **DuckDB as the state store and Quack as the database service**. One R package hosts the database and supplies thin R clients.
+[![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
+[![r-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
 
-```text
-R server process: DuckDB file + workflow SQL + Quack
-                                  ⇅
-R client processes: submit → claim → execute → checkpoint
+**Durable R workflows. DuckDB owns the state; Quack serves it.**
+
+One R package hosts the database and supplies thin R clients. Workers
+pull leased tasks, run ordinary R functions, and save named step results
+for replay.
+
+## Lineage: Absurd, expressed through R
+
+[Absurd](https://github.com/earendil-works/absurd), from [Earendil
+Works](https://github.com/earendil-works), establishes the central idea:
+durable execution can live in a database, with ordinary functions
+replaying named checkpoints after interruption. CanardAbsurd adapts that
+model to **R handlers, DuckDB state, and Quack remote SQL**.
+
+The shared lineage is the execution model, not PostgreSQL schema or SDK
+wire compatibility. CanardAbsurd owns its SQL state machine and R API.
+External effects still require application-level idempotency.
+
+``` mermaid
+flowchart LR
+  P["R producer"] -->|submit| Q["Quack server"]
+  W["R workers"] -->|claim and checkpoint| Q
+  Q --> D[("DuckDB workflow state")]
+  D -->|saved step results| Q
+  Q -->|leased tasks and replay| W
 ```
 
-The checkpoint-and-replay model is inspired by [Absurd](https://github.com/earendil-works/absurd). Workflow handlers run in client R processes, outside database transactions. No separate message broker is required.
+[Get
+started](https://rgenomicsetl.github.io/CanardAbsurd/articles/getting-started.html)
+· [Quack
+deployment](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html)
+· [API
+reference](https://rgenomicsetl.github.io/CanardAbsurd/reference/index.html)
+
+## A real server, client, and resumed workflow
+
+This example starts a temporary Quack server and connects through a
+separate DuckDB client. It executes while this README is rendered. Quack
+must already be installed for the R DuckDB runtime; package loading does
+not download extensions.
+
+``` r
+local({
+  path <- tempfile(fileext = ".duckdb")
+  on.exit(unlink(c(path, paste0(path, ".wal"))), add = TRUE)
+  uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
+
+  server <- ca_serve(path, uri, token = "readme-local-only")
+  on.exit(ca_close(server), add = TRUE, after = FALSE)
+  client <- ca_connect(uri, token = "readme-local-only")
+  on.exit(ca_close(client), add = TRUE, after = FALSE)
+
+  id <- ca_spawn(client, "calculate", list(x = 21), id = "example-001")
+  step_calls <- 0L
+  handlers <- list(calculate = function(input, ctx) {
+    value <- ca_step(ctx, "double", function() {
+      step_calls <<- step_calls + 1L
+      input$x * 2
+    })
+    ca_sleep(ctx, "yield", seconds = 0)
+    value
+  })
+
+  ca_work(client, handlers, max_tasks = 2)
+  task <- ca_inspect(client, id)
+  stopifnot(task$state == "completed", task$attempt == 2L,
+            task$result == 42, step_calls == 1L)
+
+  list(
+    runtime = ca_runtime(client),
+    workflow = data.frame(
+      state = task$state, attempts = task$attempt,
+      step_executions = step_calls, result = task$result
+    )
+  )
+})
+#> $runtime
+#>   duckdb_version quack_version schema_version
+#> 1         v1.5.3       1693647              1
+#>
+#> $workflow
+#>       state attempts step_executions result
+#> 1 completed        2               1     42
+```
+
+The first attempt saves `double` and suspends. The second attempt
+replays that result, passes the saved sleep, and completes. The callback
+runs once. A zero-second sleep makes the suspension visible without
+waiting during the build.
+
+For development without a server, `ca_open()` provides the same API
+against an embedded database. For deployment, one long-lived R process
+owns `ca_serve()`; independent worker processes use `ca_connect()` and
+`ca_work()`.
 
 ## Install
 
-```sh
-R CMD INSTALL .
-```
+The package is published through the [RGenomicsETL
+r-universe](https://rgenomicsetl.r-universe.dev/CanardAbsurd). A source
+checkout can also be installed with `R CMD INSTALL .`.
 
-Install Quack explicitly for the DuckDB runtime used by R:
+Quack is a separate DuckDB extension. Install it explicitly for the
+DuckDB runtime used by R before running server/client examples. In this
+checkout, `make quack` performs that installation.
 
-```r
-con <- DBI::dbConnect(duckdb::duckdb())
-DBI::dbExecute(con, "INSTALL quack")
-DBI::dbDisconnect(con, shutdown = TRUE)
-```
+## The recovery contract
 
-Package loading and client connection do not download extensions. A compatible signed extension file can instead be passed as `extension` to `ca_serve()` or `ca_connect()`.
+- **Atomic claims and fenced writes.** A worker must hold the current
+  unexpired lease token to checkpoint, heartbeat, complete, fail, or
+  suspend a task.
+- **Replay, not exactly-once external effects.** A crash after an API
+  call but before its checkpoint can repeat that call. Use
+  business-level idempotency keys.
+- **Explicit heartbeats.** Step boundaries renew the lease. Long
+  operations must call `ca_heartbeat(ctx)` before expiry; no R
+  background thread is used.
+- **Stable steps.** Names and JSON result shapes are persistent
+  interfaces. Give loop steps explicit indexed names and keep resumable
+  handlers compatible.
+- **One database owner.** Other processes connect through Quack rather
+  than opening the writable database file. Connection handles own
+  dedicated, process-local connections; do not wrap operations in
+  external transactions.
 
-## Host the database
+See [Durability and
+recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html)
+for failure budgets, cancellation, JSON semantics, and operational
+limits.
 
-In an R session that remains alive:
+## Scope and development
 
-```r
-library(CanardAbsurd)
+This experimental release provides tasks, priorities, checkpoint replay,
+fixed retry delays, durable sleep, cancellation, and inspection. Events,
+cron, automatic retention, task history tables, and schema migrations
+are not provided. Operators must manage database growth and protect
+Quack endpoints with appropriate authentication, network restrictions,
+and TLS.
 
-server <- ca_serve(
-  "workflows.duckdb",
-  uri = "quack:127.0.0.1:9494",
-  token = Sys.getenv("CANARD_TOKEN")
-)
-ca_runtime(server)
-# ca_close(server) stops serving and closes the database.
-```
+`make docs` evaluates the README, renders a litedown landing page, and
+builds pkgdown guides and reference pages. `make check` builds and
+checks the source package, including its evaluated vignettes.
+`make test` runs `tinytest`, real multi-process Quack tests, and
+`s7contract` laws. The Quack tests cover competing claims, worker and
+database-host crashes, and stale completions.
 
-Set a nonempty token in both server and client environments. Other processes connect through Quack; they do not open the database file. Use authenticated ingress and TLS for non-local deployments. The token grants trusted database access, not per-queue tenant isolation.
-
-## Submit and execute
-
-In another R session:
-
-```r
-library(CanardAbsurd)
-
-db <- ca_connect("quack:127.0.0.1:9494", Sys.getenv("CANARD_TOKEN"))
-id <- ca_spawn(db, "calculate", list(x = 21), id = "calculation-001")
-
-handlers <- list(calculate = function(input, ctx) {
-  value <- ca_step(ctx, "double", function() input$x * 2)
-  ca_sleep(ctx, "pause", seconds = 1)
-  value
-})
-
-ca_work(db, handlers, max_tasks = 2)
-ca_inspect(db, id)$result
-# 42
-ca_close(db)
-```
-
-The first attempt saves `double` and suspends at `pause`. The next attempt replays `double`, passes the saved sleep, and completes. Run multiple client processes for concurrency. `ca_work(..., idle_timeout = 0)` drains currently eligible work; the default waits for more work until interrupted.
-
-`ca_open()` provides the same API against an embedded database for development and local execution. Handles own dedicated, process-local connections; do not wrap package operations in externally managed transactions.
-
-## Guarantees and obligations
-
-- **Atomic claims:** each claim is one server-side update. DuckDB transaction conflicts receive bounded retries.
-- **Lease fencing:** checkpoints, heartbeats, completion, failure, and sleep require the current unexpired token. Cancellation invalidates worker writes.
-- **Recovery:** expired claims are eligible for another attempt until the failure budget is exhausted. The claim path also reaps exhausted leases.
-- **Replay:** named steps reuse saved JSON results. Null values are distinct from missing checkpoints. JSON arrays normalize to R lists on both initial execution and replay.
-- **Durable sleep:** the database clock sets the deadline; suspension and its checkpoint commit together. Sleeps do not consume the failure budget.
-- **External effects are at-least-once:** a crash after an API call but before checkpointing can repeat that call. Use stable business-level idempotency keys.
-- **Explicit heartbeats:** step boundaries renew leases. During long operations call `ca_heartbeat(ctx)` before expiry. No R background thread or automatic process termination is used.
-- **Stable workflow code:** names and result shapes are persistent interfaces. Give loop steps explicit indexed names and keep resumable handlers compatible with saved checkpoints.
-- **Idempotent submission:** a stable task ID admits only an identical submission. Supply that ID when retrying after an ambiguous network outcome. Deduplication lasts as long as the task row is retained.
-
-## Scope
-
-Version 0.0.1 provides tasks, priorities, named steps, fixed retry delays, failure budgets, cancellation, durable sleep, and inspection. Schema version 1 is checked at open/connect time. Events, cron, automatic retention, task history tables, and cross-version migrations are not implemented. Operators must monitor and manage database growth.
-
-Checkpoints live on the task row so lease changes and checkpoint writes conflict on the same durable record. This trades whole-row JSON updates for a simple ownership invariant. Individual JSON values are limited to 1 MiB; a task's checkpoint document is limited to 16 MiB. This is not a high-throughput capacity claim.
-
-Quack is experimental. `ca_runtime()` reports the server's actual DuckDB, Quack, and schema versions. The initial validation target is DuckDB **v1.5.3** with Quack **1693647**, on Linux x86-64; other pairs require testing.
-
-## Development
-
-```sh
-make document
-make test
-make check
-```
-
-Tests are installed under `inst/tinytest/`. They exercise independent R processes against a real Quack server, contended claims, worker death, checkpoint recovery, and stale completions. `s7contract` supplies generative replay and fencing laws. `make test` and `make check` require Quack; an ordinary package check skips remote cases only when the extension is unavailable.
-
-Builds and check output go under `artifacts/`. Run the Tree-sitter anti-slop audit on the R sources and tests before handoff.
+Licensed under
+[GPL-2-or-later](https://github.com/RGenomicsETL/CanardAbsurd/blob/main/LICENSE.md).

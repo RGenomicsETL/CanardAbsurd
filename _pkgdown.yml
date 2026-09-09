@@ -1,0 +1,66 @@
+url: https://rgenomicsetl.github.io/CanardAbsurd/
+destination: artifacts/pkgdown
+
+template:
+  bootstrap: 5
+  bootswatch: flatly
+  bslib:
+    primary: '#17675c'
+    link-color: '#17675c'
+  includes:
+    in_header: |
+      <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs';
+        const nodes = [...document.querySelectorAll('pre.mermaid, pre:has(> code.language-mermaid)')];
+        for (const node of nodes) {
+          node.textContent = node.textContent;
+          node.classList.add('mermaid');
+        }
+        mermaid.initialize({startOnLoad: false, securityLevel: 'strict', theme: 'neutral'});
+        await mermaid.run({nodes});
+      </script>
+
+home:
+  title: Durable R workflows with DuckDB and Quack
+  description: Host a workflow database and run thin R workers with leased tasks, checkpoint replay, and crash recovery.
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [search, github]
+  components:
+    intro:
+      text: Get started
+      href: articles/getting-started.html
+
+articles:
+  - title: Guides
+    contents:
+      - getting-started
+      - articles/quack-server
+      - durability
+
+reference:
+  - title: Database connections
+    desc: Host a database, connect a client, and inspect the executing runtime.
+    contents:
+      - ca_open
+      - ca_serve
+      - ca_connect
+      - ca_runtime
+      - ca_close
+  - title: Task administration
+    contents:
+      - ca_spawn
+      - ca_inspect
+      - ca_cancel
+  - title: Workflow execution
+    contents:
+      - ca_work
+      - ca_claim
+      - ca_run
+      - ca_step
+      - ca_sleep
+      - ca_heartbeat
+      - ca_complete
+      - ca_fail
