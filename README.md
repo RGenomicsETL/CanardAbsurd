@@ -48,45 +48,21 @@ must already be installed for the R DuckDB runtime; package loading does
 not download extensions.
 
 ``` r
-local({
-  path <- tempfile(fileext = ".duckdb")
-  on.exit(unlink(c(path, paste0(path, ".wal"))), add = TRUE)
-  uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
-
-  server <- ca_serve(path, uri, token = "readme-local-only")
-  on.exit(ca_close(server), add = TRUE, after = FALSE)
-  client <- ca_connect(uri, token = "readme-local-only")
-  on.exit(ca_close(client), add = TRUE, after = FALSE)
-
-  id <- ca_spawn(client, "calculate", list(x = 21), id = "example-001")
-  step_calls <- 0L
-  handlers <- list(calculate = function(input, ctx) {
-    value <- ca_step(ctx, "double", function() {
-      step_calls <<- step_calls + 1L
-      input$x * 2
-    })
-    ca_sleep(ctx, "yield", seconds = 0)
-    value
+step_calls <- 0L
+calculate <- function(input, ctx) {
+  value <- ca_step(ctx, "double", function() {
+    step_calls <<- step_calls + 1L
+    input$x * 2
   })
+  ca_sleep(ctx, "yield", seconds = 0)
+  value
+}
 
-  ca_work(client, handlers, max_tasks = 2)
-  task <- ca_inspect(client, id)
-  stopifnot(task$state == "completed", task$attempt == 2L,
-            task$result == 42, step_calls == 1L)
-
-  list(
-    runtime = ca_runtime(client),
-    workflow = data.frame(
-      state = task$state, attempts = task$attempt,
-      step_executions = step_calls, result = task$result
-    )
-  )
-})
-#> $runtime
-#>   duckdb_version quack_version schema_version
-#> 1         v1.5.3       1693647              1
-#>
-#> $workflow
+id <- ca_spawn(client, "calculate", list(x = 21), id = "example-001")
+ca_work(client, list(calculate = calculate), max_tasks = 2)
+task <- ca_inspect(client, id)
+data.frame(state = task$state, attempts = task$attempt,
+           step_executions = step_calls, result = task$result)
 #>       state attempts step_executions result
 #> 1 completed        2               1     42
 ```
@@ -124,6 +100,17 @@ extensions.
 - **Explicit heartbeats.** Step boundaries renew the lease. Long
   operations must call `ca_heartbeat(ctx)` before expiry; no R
   background thread is used.
+- **Visible failures.** `ca_run()` returns the original handler
+  condition and persisted state. `ca_work()` warns about handler
+  failures unless given an `on_result` callback. Persistence errors
+  propagate without being recorded as handler failures.
+- **Caller-owned SQL retries.** Known transaction conflicts signal
+  `canard_retryable`. A calling handler decides whether to wait and
+  invoke the `canard_retry` restart for that statement. Without a
+  handler, the conflict propagates. Transport failures offer no retry
+  restart. Released drivers require a message-based compatibility
+  adapter for conflict detection; see [the documented
+  limitation](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html#error-metadata-compatibility).
 - **Stable steps.** Names and JSON result shapes are persistent
   interfaces. Give loop steps explicit indexed names and keep resumable
   handlers compatible.
