@@ -26,5 +26,7 @@ writes, not external services. Use stable business keys for external requests.
 \details{
 Step names must be unique in an attempt and stable across deployments. Include
 an explicit index for repeated steps in a loop. Checkpoint results must remain
-compatible with handlers that can resume existing tasks.
+compatible with handlers that can resume existing tasks. Schema version 1
+limits the accumulated checkpoint document, including escaped value JSON and
+record keys, to 16 MiB. There is no additional per-step size limit.
 }

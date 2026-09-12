@@ -21,12 +21,15 @@ CanardTask <- S7::new_class(
 #'
 #' @inheritParams ca_close
 #' @param name Registered handler name.
-#' @param input JSON-compatible R value. Values are limited to 1 MiB of JSON.
+#' @param input JSON-compatible R value. Schema version 1 limits each input to
+#'   1 MiB of UTF-8 JSON and the accumulated checkpoint document to 16 MiB.
+#'   These server-side limits also apply to direct SQL clients.
 #' @param queue Queue name.
 #' @param id Stable task ID (1 to 256 characters), or `NULL` to generate a UUID.
 #' @param priority Integer priority; larger values are claimed first.
 #' @param max_failures Number of failures, including expired leases, before a
-#'   task becomes terminal. Durable sleeps do not consume this budget.
+#'   task becomes terminal. Durable sleeps do not consume this budget. Schema
+#'   version 1 accepts values from 1 through 1,000,000.
 #' @return The task ID, a character scalar.
 #' @export
 ca_spawn <- function(db, name, input = NULL, queue = "default", id = NULL,

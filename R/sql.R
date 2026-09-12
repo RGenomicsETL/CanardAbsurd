@@ -31,12 +31,8 @@
 }
 
 .ca_json <- function(value) {
-  encoded <- as.character(jsonlite::toJSON(value, auto_unbox = TRUE,
+  as.character(jsonlite::toJSON(value, auto_unbox = TRUE,
     null = "null", na = "null", digits = NA))
-  if (nchar(encoded, type = "bytes") > 1048576L) {
-    stop("A JSON value may not exceed 1 MiB", call. = FALSE)
-  }
-  encoded
 }
 
 .ca_owned <- function(task, statement, ...) {

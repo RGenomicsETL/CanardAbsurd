@@ -19,7 +19,9 @@ ca_spawn(
 
 \item{name}{Registered handler name.}
 
-\item{input}{JSON-compatible R value. Values are limited to 1 MiB of JSON.}
+\item{input}{JSON-compatible R value. Schema version 1 limits each input to
+1 MiB of UTF-8 JSON and the accumulated checkpoint document to 16 MiB.
+These server-side limits also apply to direct SQL clients.}
 
 \item{queue}{Queue name.}
 
@@ -28,7 +30,8 @@ ca_spawn(
 \item{priority}{Integer priority; larger values are claimed first.}
 
 \item{max_failures}{Number of failures, including expired leases, before a
-task becomes terminal. Durable sleeps do not consume this budget.}
+task becomes terminal. Durable sleeps do not consume this budget. Schema
+version 1 accepts values from 1 through 1,000,000.}
 }
 \value{
 The task ID, a character scalar.
