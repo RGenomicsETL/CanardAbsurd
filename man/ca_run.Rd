@@ -4,18 +4,27 @@
 \alias{ca_run}
 \title{Execute one claimed workflow attempt}
 \usage{
-ca_run(task, handler)
+ca_run(task, handler, failure_delay = 0)
 }
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
 \item{handler}{Function taking \verb{(input, ctx)}.}
+
+\item{failure_delay}{Nonnegative seconds before a failed task can be claimed
+again. This is separate from caller-managed SQL conflict retries.}
 }
 \value{
-One of \code{"completed"}, \code{"suspended"}, or \code{"failed"}, invisibly.
+A list, invisibly, with \code{id}, claim \code{attempt}, attempt \code{status}
+(\code{"completed"}, \code{"suspended"}, or \code{"failed"}), persisted task \code{state},
+JSON-normalized \code{result}, and original handler \code{error}. A failed attempt can
+leave the task ready for retry or terminally failed. Error text is stored
+without truncation; the R condition remains available in this outcome.
 }
 \description{
-Calls \code{handler(task@input, task)}, records its result, or records an R error as
-a task failure. Interrupts and lease loss propagate to the caller. A failure
-to persist an outcome also propagates; it is not silently acknowledged.
+Calls \code{handler(task@input, task)}, records its result, or records a handler
+error as a task failure. Interrupts, lease loss, and persistence errors
+propagate to the caller. A storage failure is not charged to the handler's
+failure budget. If recording a handler failure also fails, both conditions
+are retained in \code{canard_failure_recording_error}; see \code{\link[=ca_conditions]{ca_conditions()}}.
 }

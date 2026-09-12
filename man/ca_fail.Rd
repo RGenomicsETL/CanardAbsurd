@@ -9,7 +9,7 @@ ca_fail(task, message, delay_seconds = 0)
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
-\item{message}{Error text, at most 8192 characters.}
+\item{message}{Error text, stored without truncation.}
 
 \item{delay_seconds}{Nonnegative delay before another claim is eligible.}
 }

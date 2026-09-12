@@ -9,7 +9,7 @@ ca_step(task, name, fn)
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
-\item{name}{Stable checkpoint name, at most 256 characters.}
+\item{name}{Stable checkpoint name.}
 
 \item{fn}{Zero-argument function returning a JSON-compatible value.}
 }
@@ -26,5 +26,7 @@ writes, not external services. Use stable business keys for external requests.
 \details{
 Step names must be unique in an attempt and stable across deployments. Include
 an explicit index for repeated steps in a loop. Checkpoint results must remain
-compatible with handlers that can resume existing tasks.
+compatible with handlers that can resume existing tasks. Schema version 1
+limits the accumulated checkpoint document, including escaped value JSON and
+record keys, to 16 MiB. There is no additional per-step size limit.
 }

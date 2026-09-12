@@ -9,7 +9,8 @@ ca_claim(
   queue = "default",
   worker = paste0("R-", Sys.getpid()),
   lease_seconds = 30,
-  task_names = NULL
+  task_names = NULL,
+  reap_limit = 64L
 )
 }
 \arguments{
@@ -23,6 +24,10 @@ ca_claim(
 must explicitly heartbeat before this interval expires.}
 
 \item{task_names}{Optional character vector of handler names this worker supports.}
+
+\item{reap_limit}{Maximum exhausted, expired leases to mark failed before each
+claim. Batching bounds contention with other workers; it does not limit
+recovery of leases that still have failure budget.}
 }
 \value{
 An S7 \code{CanardTask}, or \code{NULL} when no eligible task exists. Properties
@@ -31,6 +36,7 @@ An S7 \code{CanardTask}, or \code{NULL} when no eligible task exists. Properties
 }
 \description{
 Expired leases are recoverable until the failure budget is exhausted.
-Claims use optimistic DuckDB transactions with bounded conflict retries.
+Claims use optimistic DuckDB transactions. Callers can handle
+\code{canard_retryable} to retry a conflicting statement; see \code{\link[=ca_conditions]{ca_conditions()}}.
 No database transaction remains open while an R handler executes.
 }

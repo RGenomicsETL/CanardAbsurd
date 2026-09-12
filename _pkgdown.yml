@@ -64,3 +64,4 @@ reference:
       - ca_heartbeat
       - ca_complete
       - ca_fail
+      - ca_conditions

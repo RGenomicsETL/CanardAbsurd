@@ -7,6 +7,6 @@ WHERE id IN (
     SELECT id FROM canard_absurd.tasks
     WHERE queue = ?queue AND state = 'running'
         AND lease_until <= current_timestamp AND failures + 1 >= max_failures
-    ORDER BY lease_until, id LIMIT 64
+    ORDER BY lease_until, id LIMIT ?reap_limit
 )
 RETURNING 1 AS changed, id;

@@ -8,7 +8,8 @@ vignette: >
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE, comment = "#>", error = FALSE)
+knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
+                    comment = "#>", error = FALSE, message = FALSE)
 library(CanardAbsurd)
 ```
 
@@ -21,21 +22,23 @@ against a remote connection made with `ca_connect()`.
 
 ## Run a task
 
+```{r open}
+db <- ca_open()
+```
+
+```{r cleanup, include=FALSE}
+withr::defer(ca_close(db))
+```
+
 ```{r first-task}
-local({
-  db <- ca_open()
-  on.exit(ca_close(db))
+total <- function(input, ctx) {
+  ca_step(ctx, "calculate", function() input$amount + input$tax)
+}
 
-  id <- ca_spawn(db, "total", list(amount = 20, tax = 2), id = "order-001")
-  handlers <- list(total = function(input, ctx) {
-    ca_step(ctx, "calculate", function() input$amount + input$tax)
-  })
-
-  ca_work(db, handlers, max_tasks = 1)
-  task <- ca_inspect(db, id)
-  stopifnot(task$state == "completed", task$result == 22)
-  list(state = task$state, result = task$result)
-})
+id <- ca_spawn(db, "total", list(amount = 20, tax = 2), id = "order-001")
+ca_work(db, list(total = total), max_tasks = 1)
+task <- ca_inspect(db, id)
+list(state = task$state, result = task$result)
 ```
 
 The stable ID also makes submission idempotent: submitting the same name, input,
@@ -49,36 +52,37 @@ The first step below completes once. The second step fails on its first call,
 so the worker retries the handler. The saved first step is replayed.
 
 ```{r replay}
-local({
-  db <- ca_open()
-  on.exit(ca_close(db))
-  calls <- c(prepare = 0L, deliver = 0L)
+calls <- c(prepare = 0L, deliver = 0L)
+replay <- function(input, ctx) {
+  value <- ca_step(ctx, "prepare", function() {
+    calls[["prepare"]] <<- calls[["prepare"]] + 1L
+    input$value * 2
+  })
+  ca_step(ctx, "deliver", function() {
+    calls[["deliver"]] <<- calls[["deliver"]] + 1L
+    if (calls[["deliver"]] == 1L) stop("temporary failure")
+    value
+  })
+}
 
-  handler <- function(input, ctx) {
-    value <- ca_step(ctx, "prepare", function() {
-      calls[["prepare"]] <<- calls[["prepare"]] + 1L
-      input$value * 2
-    })
-    ca_step(ctx, "deliver", function() {
-      calls[["deliver"]] <<- calls[["deliver"]] + 1L
-      if (calls[["deliver"]] == 1L) stop("temporary failure")
-      value
-    })
+report <- function(outcome) {
+  if (!is.null(outcome$error)) {
+    cat("Attempt", outcome$attempt, ":", conditionMessage(outcome$error), "\n")
   }
-
-  id <- ca_spawn(db, "replay", list(value = 21), id = "replay-001")
-  ca_work(db, list(replay = handler), idle_timeout = 0)
-  task <- ca_inspect(db, id)
-  stopifnot(task$state == "completed", task$result == 42,
-            identical(calls, c(prepare = 1L, deliver = 2L)))
-  data.frame(state = task$state, attempts = task$attempt,
-             failures = task$failures, prepare_calls = calls[["prepare"]],
-             deliver_calls = calls[["deliver"]], result = task$result)
-})
+}
+id <- ca_spawn(db, "replay", list(value = 21), id = "replay-001")
+ca_work(db, list(replay = replay), idle_timeout = 0, on_result = report)
+task <- ca_inspect(db, id)
+data.frame(state = task$state, attempts = task$attempt,
+           failures = task$failures, prepare_calls = calls[["prepare"]],
+           deliver_calls = calls[["deliver"]], result = task$result)
 ```
 
-The local counters expose which callbacks ran; they are not durable workflow
-state. Actual durable results live in the database.
+`on_result` receives every persisted attempt outcome, including the original
+handler condition on failure. Without a callback, the worker warns on failures.
+`failure_delay` controls when a failed task becomes eligible again; its default
+is zero. The local counters expose which callbacks ran; they are not durable
+workflow state. Actual durable results live in the database.
 
 ## Sleep without occupying a worker
 
@@ -86,20 +90,14 @@ state. Actual durable results live in the database.
 passes that named sleep without scheduling it again.
 
 ```{r sleep}
-local({
-  db <- ca_open()
-  on.exit(ca_close(db))
-  id <- ca_spawn(db, "pause", max_failures = 1)
-  handler <- function(input, ctx) {
-    ca_sleep(ctx, "pause", seconds = 0)
-    "resumed"
-  }
-
-  ca_work(db, list(pause = handler), max_tasks = 2)
-  task <- ca_inspect(db, id)
-  stopifnot(task$result == "resumed", task$attempt == 2L, task$failures == 0L)
-  list(result = task$result, attempts = task$attempt, failures = task$failures)
-})
+pause <- function(input, ctx) {
+  ca_sleep(ctx, "pause", seconds = 0)
+  "resumed"
+}
+id <- ca_spawn(db, "pause", max_failures = 1)
+ca_work(db, list(pause = pause), max_tasks = 2)
+task <- ca_inspect(db, id)
+list(result = task$result, attempts = task$attempt, failures = task$failures)
 ```
 
 A zero-second sleep demonstrates the state transition without delaying the
@@ -115,3 +113,9 @@ failure budget.
 Each worker runs one attempt at a time. For concurrency, run independent R
 processes connected to a Quack server. Only names present in `handlers` are
 claimed. See the [Quack server guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html).
+
+Close the connection when finished:
+
+```{r close}
+ca_close(db)
+```

@@ -9,7 +9,7 @@ ca_sleep(task, name, seconds)
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
-\item{name}{Stable checkpoint name, at most 256 characters.}
+\item{name}{Stable checkpoint name.}
 
 \item{seconds}{Nonnegative sleep duration in seconds.}
 }
@@ -21,5 +21,6 @@ ca_sleep(task, name, seconds)
 Saves a sleep checkpoint and releases the claim atomically. The worker resumes
 the handler from its beginning after the deadline, replaying completed steps.
 The sleep returns immediately when replayed. Code after the sleep does not run
-in the suspended attempt. Do not swallow the \code{canard_suspended} condition.
+in the suspended attempt. \code{canard_suspended} is a control-flow condition rather
+than an error, so an ordinary error handler does not swallow suspension.
 }
