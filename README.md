@@ -40,84 +40,327 @@ deployment](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.ht
 · [API
 reference](https://rgenomicsetl.github.io/CanardAbsurd/reference/index.html)
 
-## A real server, client, and resumed workflow
-
-This example starts a temporary Quack server and connects through a
-separate DuckDB client. It executes while this README is rendered. Quack
-must already be installed for the R DuckDB runtime; package loading does
-not download extensions.
-
-``` r
-step_calls <- 0L
-calculate <- function(input, ctx) {
-  value <- ca_step(ctx, "double", function() {
-    step_calls <<- step_calls + 1L
-    input$x * 2
-  })
-  ca_sleep(ctx, "yield", seconds = 0)
-  value
-}
-
-id <- ca_spawn(client, "calculate", list(x = 21), id = "example-001")
-ca_work(client, list(calculate = calculate), max_tasks = 2)
-task <- ca_inspect(client, id)
-data.frame(state = task$state, attempts = task$attempt,
-           step_executions = step_calls, result = task$result)
-#>       state attempts step_executions result
-#> 1 completed        2               1     42
-```
-
-The first attempt saves `double` and suspends. The second attempt
-replays that result, passes the saved sleep, and completes. The callback
-runs once. A zero-second sleep makes the suspension visible without
-waiting during the build.
-
-For development without a server, `ca_open()` provides the same API
-against an embedded database. For deployment, one long-lived R process
-owns `ca_serve()`; independent worker processes use `ca_connect()` and
-`ca_work()`.
-
 ## Install
 
-The package is registered with the [RGenomicsETL
-r-universe](https://rgenomicsetl.r-universe.dev/). Install a source
-checkout with `R CMD INSTALL .`.
+Install [CanardAbsurd from
+R-universe](https://rgenomicsetl.r-universe.dev/CanardAbsurd), or run
+`R CMD INSTALL .` from a source checkout. Follow the [runtime setup
+instructions](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html)
+to install DuckDB’s JSON and Quack extensions.
 
-The workflow SQL requires DuckDB’s JSON extension; remote access also
-requires Quack. Before running the examples, `make quack` explicitly
-installs both for the R DuckDB runtime and creates `~/.duckdb` so they
-persist across R processes. The package itself never downloads
-extensions.
+## Start a server and connect a client
 
-## The recovery contract
+Choose a temporary database file, an available localhost port, and a
+shared authentication token for this example. Register cleanup as
+resources are created so it also runs if an example fails.
 
-- **Atomic claims and fenced writes.** A worker must hold the current
-  unexpired lease token to checkpoint, heartbeat, complete, fail, or
-  suspend a task.
-- **Replay, not exactly-once external effects.** A crash after an API
-  call but before its checkpoint can repeat that call. Use
-  business-level idempotency keys.
-- **Explicit heartbeats.** Step boundaries renew the lease. Long
-  operations must call `ca_heartbeat(ctx)` before expiry; no R
-  background thread is used.
-- **Visible failures.** `ca_run()` returns the original handler
-  condition and persisted state. `ca_work()` warns about handler
-  failures unless given an `on_result` callback. Persistence errors
-  propagate without being recorded as handler failures.
-- **Caller-owned SQL retries.** Known transaction conflicts signal
-  `canard_retryable`. A calling handler decides whether to wait and
-  invoke the `canard_retry` restart for that statement. Without a
-  handler, the conflict propagates. Transport failures offer no retry
-  restart. Released drivers require a message-based compatibility
-  adapter for conflict detection; see [the documented
-  limitation](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html#error-metadata-compatibility).
-- **Stable steps.** Names and JSON result shapes are persistent
-  interfaces. Give loop steps explicit indexed names and keep resumable
-  handlers compatible.
-- **One database owner.** Other processes connect through Quack rather
-  than opening the writable database file. Connection handles own
-  dedicated, process-local connections; do not wrap operations in
-  external transactions.
+``` r
+library(CanardAbsurd)
+path <- tempfile(fileext = ".duckdb")
+withr::defer(unlink(c(path, paste0(path, ".wal"))))
+uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
+token <- "readme-local-only"
+```
+
+Start the server. Its R process owns the database and must remain
+running while clients use it.
+
+``` r
+server <- ca_serve(path, uri, token = token)
+withr::defer(ca_close(server))
+```
+
+Connect a client and ask the server for its runtime versions. The client
+uses Quack rather than opening the database file.
+
+``` r
+client <- ca_connect(uri, token = token)
+withr::defer(ca_close(client))
+ca_runtime(client)
+#>   duckdb_version quack_version schema_version
+#> 1         v1.5.3       1693647              1
+```
+
+## Submit, checkpoint, and resume
+
+A handler takes its input and a task context. `ca_step()` saves the
+callback’s result; `ca_sleep()` saves a pause and releases the claim.
+The zero-second pause below makes the task immediately eligible for
+another worker.
+
+``` r
+calculate <- function(input, ctx) {
+  value <- ca_step(ctx, "double", function() {
+    input$x * 2
+  })
+  ca_sleep(ctx, "pause", seconds = 0)
+  value
+}
+```
+
+Submit the input to the `reports` queue with a stable task ID.
+
+``` r
+id <- ca_spawn(client, "calculate", list(x = 21),
+               id = "report-001", queue = "reports")
+id
+#> [1] "report-001"
+```
+
+Repeating the same submission returns its task ID instead of creating
+another task.
+
+``` r
+ca_spawn(client, "calculate", list(x = 21), id = id, queue = "reports")
+#> [1] "report-001"
+```
+
+Claim and execute one attempt. It saves `double`, reaches the pause, and
+returns with the task ready to be resumed.
+
+``` r
+claim <- ca_claim(client, queue = "reports")
+outcome <- ca_run(claim, calculate)
+outcome[c("attempt", "status", "state")]
+#> $attempt
+#> [1] 1
+#>
+#> $status
+#> [1] "suspended"
+#>
+#> $state
+#> [1] "ready"
+```
+
+Both named checkpoints are now stored on the server.
+
+``` r
+names(ca_inspect(client, id)$checkpoints)
+#> [1] "double" "pause"
+```
+
+Close the client and reconnect. The saved work belongs to the database,
+not to the client connection.
+
+``` r
+ca_close(client)
+client <- ca_connect(uri, token = token)
+```
+
+Let `ca_work()` claim the next attempt using its named handler list.
+`double` replays its saved value, the saved pause returns, and the task
+completes.
+
+``` r
+ca_work(client, list(calculate = calculate), queue = "reports", max_tasks = 1)
+ca_inspect(client, id)[c("state", "attempt", "failures", "result")]
+#> $state
+#> [1] "completed"
+#>
+#> $attempt
+#> [1] 2
+#>
+#> $failures
+#> [1] 0
+#>
+#> $result
+#> [1] 42
+```
+
+## Use a business key for external effects
+
+A file write can finish before its step result is checkpointed. Retrying
+that step will perform the write again. Use a business key for the
+filename so the retry replaces the same receipt instead of producing
+another one.
+
+``` r
+receipt_dir <- tempfile("receipts-")
+dir.create(receipt_dir)
+withr::defer(unlink(receipt_dir, recursive = TRUE))
+```
+
+To expose the write/checkpoint gap, this callback deliberately raises a
+classed error after its first file write.
+
+``` r
+publish <- function(input, ctx) {
+  ca_step(ctx, "receipt", function() {
+    receipt <- file.path(receipt_dir, paste0(input$order_id, ".txt"))
+    writeLines(input$text, receipt)
+    if (ctx@attempt == 1L) {
+      stop(errorCondition("Stopped before checkpoint", class = "publication_error"))
+    }
+    input$order_id
+  })
+}
+```
+
+Give the task a budget of two failures. Run one attempt with no delay
+before it can be claimed again. `ca_run()` returns the original
+condition and the persisted task state: a failed attempt can leave a
+task ready for retry.
+
+``` r
+receipt_id <- ca_spawn(client, "publish", list(order_id = "order-42", text = "total=42"),
+                       id = "receipt-001", queue = "receipts", max_failures = 2)
+claim <- ca_claim(client, queue = "receipts")
+outcome <- ca_run(claim, publish, failure_delay = 0)
+outcome[c("status", "state", "error")]
+#> $status
+#> [1] "failed"
+#>
+#> $state
+#> [1] "ready"
+#>
+#> $error
+#> <publication_error: Stopped before checkpoint>
+```
+
+The file exists, but the step has no saved checkpoint.
+
+``` r
+readLines(file.path(receipt_dir, "order-42.txt"))
+#> [1] "total=42"
+names(ca_inspect(client, receipt_id)$checkpoints)
+#> character(0)
+```
+
+Retry with a worker. `on_result` receives the attempt’s outcome after
+persistence and lets the caller choose how to report it.
+
+``` r
+ca_work(client, list(publish = publish), queue = "receipts", max_tasks = 1,
+        on_result = function(outcome) {
+          print(outcome[c("attempt", "status", "result")])
+        })
+#> $attempt
+#> [1] 2
+#>
+#> $status
+#> [1] "completed"
+#>
+#> $result
+#> [1] "order-42"
+```
+
+The retry writes the same file. There is one receipt and one recorded
+handler failure. For an external API, use an equivalent idempotency key
+enforced by that service.
+
+``` r
+list(files = list.files(receipt_dir),
+     text = readLines(file.path(receipt_dir, "order-42.txt")),
+     failures = ca_inspect(client, receipt_id)$failures)
+#> $files
+#> [1] "order-42.txt"
+#>
+#> $text
+#> [1] "total=42"
+#>
+#> $failures
+#> [1] 1
+```
+
+## Name loop steps and choose SQL retries
+
+Use each item’s stable ID in its checkpoint name. A resumed loop can
+then find the saved result for that item.
+
+``` r
+double_items <- function(input, ctx) {
+  lapply(input$items, function(item) {
+    ca_step(ctx, paste0("item-", item$id), function() item$x * 2)
+  })
+}
+```
+
+Submit a batch with two identified items.
+
+``` r
+batch_id <- ca_spawn(client, "double_items",
+                     list(items = list(list(id = "a", x = 2), list(id = "b", x = 3))),
+                     id = "batch-001", queue = "batch")
+```
+
+For competing workers, choose SQL retry delays at the call site. This
+handler allows up to three retries of a recognized conflict. The restart
+repeats only the failed SQL statement, not the R handler or its external
+effects. Returning without invoking it lets the conflict propagate.
+
+``` r
+delays <- c(0.01, 0.05, 0.1)
+withCallingHandlers(
+  ca_work(client, list(double_items = double_items), queue = "batch", max_tasks = 1),
+  canard_retryable = function(conflict) {
+    if (conflict$attempts <= length(delays)) {
+      Sys.sleep(delays[[conflict$attempts]])
+      invokeRestart("canard_retry")
+    }
+  }
+)
+```
+
+Inspect the batch’s results and checkpoint names.
+
+``` r
+batch <- ca_inspect(client, batch_id)
+batch$result
+#> [[1]]
+#> [1] 4
+#>
+#> [[2]]
+#> [1] 6
+names(batch$checkpoints)
+#> [1] "item-a" "item-b"
+```
+
+Transport failures propagate without a retry restart. Released drivers
+require an error-message compatibility adapter for conflict detection;
+its conditions carry `message_based = TRUE`. See the [documented
+limitation](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html#error-metadata-compatibility)
+when selecting a DuckDB/Quack version.
+
+## Renew a lease and cancel a task
+
+A claimed task can renew its lease with `ca_heartbeat()`. Cancellation
+still revokes its right to update task state, even while that lease
+would otherwise be live.
+
+``` r
+cancel_id <- ca_spawn(client, "calculate", list(x = 99),
+                     id = "cancel-001", queue = "cancel")
+claim <- ca_claim(client, queue = "cancel")
+ca_heartbeat(claim, seconds = 60)
+ca_cancel(client, cancel_id)
+#> [1] TRUE
+```
+
+A completion using the cancelled claim raises `canard_lease_lost`. Catch
+that specific condition to handle the rejected write.
+
+``` r
+tryCatch(
+  ca_complete(claim, 198),
+  canard_lease_lost = function(error) conditionMessage(error)
+)
+#> [1] "Task lease is no longer owned: cancel-001"
+ca_inspect(client, cancel_id)$state
+#> [1] "cancelled"
+```
+
+## Close the connections
+
+Close the client before stopping the server.
+
+``` r
+ca_close(client)
+ca_close(server)
+```
+
+For an embedded database without a server, `ca_open()` provides the same
+task API. In a deployment, keep the server in one long-lived R process
+and run independent workers with `ca_connect()` and `ca_work()`.
 
 See [Durability and
 recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html)
@@ -127,11 +370,11 @@ limits.
 ## Scope and development
 
 This experimental release provides tasks, priorities, checkpoint replay,
-fixed retry delays, durable sleep, cancellation, and inspection. Events,
-cron, automatic retention, task history tables, and schema migrations
-are not provided. Operators must manage database growth and protect
-Quack endpoints with appropriate authentication, network restrictions,
-and TLS.
+failure retry scheduling, durable sleep, cancellation, and inspection.
+Events, cron, automatic retention, task history tables, and schema
+migrations are not provided. Operators must manage database growth and
+protect Quack endpoints with appropriate authentication, network
+restrictions, and TLS.
 
 `make docs` evaluates the README, renders a litedown landing page, and
 builds pkgdown guides and reference pages. `make check` builds and
