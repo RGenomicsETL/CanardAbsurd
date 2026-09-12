@@ -36,7 +36,13 @@ local({
     })
     x + y
   }
-  expect_identical(ca_work(db, list(work = handler), idle_timeout = 0), 2L)
+  outcomes <- list()
+  expect_identical(ca_work(db, list(work = handler), idle_timeout = 0,
+    on_result = function(outcome) outcomes[[length(outcomes) + 1L]] <<- outcome), 2L)
+  expect_identical(outcomes[[1L]]$status, "failed")
+  expect_identical(outcomes[[1L]]$state, "ready")
+  expect_identical(conditionMessage(outcomes[[1L]]$error), "transient")
+  expect_identical(outcomes[[2L]]$status, "completed")
   expect_identical(calls, c(first = 1L, second = 2L))
   expect_equal(ca_inspect(db, id)$result, 42)
   expect_identical(ca_inspect(db, id)$failures, 1L)
@@ -54,13 +60,13 @@ local({
     42
   }
   task <- ca_claim(db)
-  expect_identical(ca_run(task, handler), "suspended")
+  expect_identical(ca_run(task, handler)$status, "suspended")
   expect_false(ran_after)
   expect_identical(ca_inspect(db, id)$state, "ready")
   expect_identical(ca_inspect(db, id)$failures, 0L)
   expect_null(ca_claim(db))
   DBI::dbExecute(db@con, "UPDATE canard_absurd.tasks SET available_at = current_timestamp")
-  expect_identical(ca_run(ca_claim(db), handler), "completed")
+  expect_identical(ca_run(ca_claim(db), handler)$status, "completed")
   expect_true(ran_after)
   expect_identical(ca_inspect(db, id)$failures, 0L)
   expect_identical(ca_inspect(db, id)$attempt, 2L)
@@ -89,7 +95,7 @@ local({
   db <- local_database(path)
   expect_identical(ca_run(ca_claim(db), function(input, ctx) {
     ca_step(ctx, "saved", function() stop("must replay after restart"))
-  }), "completed")
+  })$status, "completed")
   expect_equal(ca_inspect(db, id)$result, 42)
 })
 
@@ -109,7 +115,7 @@ local({
 local({
   db <- local_database()
   id <- ca_spawn(db, "work", max_failures = 1)
-  expect_identical(ca_run(ca_claim(db), function(input, ctx) quote(x + y)), "failed")
+  expect_identical(ca_run(ca_claim(db), function(input, ctx) quote(x + y))$status, "failed")
   expect_identical(ca_inspect(db, id)$state, "failed")
   expect_identical(ca_inspect(db, id)$failures, 1L)
 })

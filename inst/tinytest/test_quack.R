@@ -21,6 +21,33 @@ if (!quack_installed) {
   exit_file("Quack is not installed for this DuckDB runtime")
 }
 
+# A real remote transaction conflict offers a statement-scoped restart.
+local({
+  path <- tempfile(fileext = ".duckdb")
+  on.exit(unlink(c(path, paste0(path, ".wal"))))
+  uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
+  server <- ca_serve(path, uri, token = "test-token")
+  on.exit(ca_close(server), add = TRUE, after = FALSE)
+  db <- ca_connect(uri, token = "test-token")
+  on.exit(ca_close(db), add = TRUE, after = FALSE)
+  id <- ca_spawn(db, "work", id = "blocked")
+  DBI::dbBegin(server@con)
+  DBI::dbExecute(server@con, "UPDATE canard_absurd.tasks SET priority = 1 WHERE id = 'blocked'")
+  event <- NULL
+  task <- withCallingHandlers(ca_claim(db), canard_retryable = function(conflict) {
+    event <<- conflict
+    DBI::dbRollback(server@con)
+    invokeRestart("canard_retry")
+  })
+  expect_identical(task@id, id)
+  expect_identical(task@attempt, 1L)
+  expect_identical(event$operation, "claim")
+  expect_identical(event$attempts, 1L)
+  expect_true(inherits(event$parent, "error"))
+  ca_complete(task, 42)
+  expect_identical(ca_inspect(db, id)$failures, 0L)
+})
+
 # Remote statements preserve JSON and schema semantics; authentication is enforced.
 local({
   fixture <- local_quack()
@@ -32,7 +59,7 @@ local({
   task <- ca_claim(db)
   expect_identical(ca_run(task, function(input, ctx) {
     ca_step(ctx, "a/'\"", function() input)
-  }), "completed")
+  })$status, "completed")
   expect_identical(ca_inspect(db, id)$result, list(x = NULL, quote = "'\"\\"))
   expect_identical(ca_inspect(db, id)$attempt, 1L)
   ca_spawn(db, "sleep", id = "sleep")
@@ -60,13 +87,20 @@ local({
       on.exit(ca_close(db))
       file.create(file.path(directory, paste0("worker-", i)))
       while (!file.exists(file.path(directory, "go"))) Sys.sleep(0.01)
-      ca_spawn(db, "work", list(n = 0), id = "dedupe", queue = "dedupe")
-      ca_work(db, list(work = function(input, ctx) {
-        ca_step(ctx, "compute", function() {
-          cat(ctx@id, "\n", file = file.path(directory, paste0("effects-", i)), append = TRUE)
-          input$n * 2
-        })
-      }), idle_timeout = 0.5, poll_seconds = 0.02, lease_seconds = 10)
+      withCallingHandlers({
+        ca_spawn(db, "work", list(n = 0), id = "dedupe", queue = "dedupe")
+        ca_work(db, list(work = function(input, ctx) {
+          ca_step(ctx, "compute", function() {
+            cat(ctx@id, "\n", file = file.path(directory, paste0("effects-", i)), append = TRUE)
+            input$n * 2
+          })
+        }), idle_timeout = 0.5, poll_seconds = 0.02, lease_seconds = 10)
+      }, canard_retryable = function(conflict) {
+        if (conflict$attempts <= 20L) {
+          Sys.sleep(runif(1L, 0.001, 0.01))
+          invokeRestart("canard_retry")
+        }
+      })
     }, args = list(fixture$uri, fixture$directory, i), libpath = .libPaths(), supervise = TRUE)
   }
   wait_until(function() all(file.exists(file.path(fixture$directory,
@@ -117,7 +151,7 @@ local({
   expect_identical(task@attempt, 2L)
   expect_identical(ca_run(task, function(input, ctx) {
     ca_step(ctx, "saved", function() stop("completed step must replay"))
-  }), "completed")
+  })$status, "completed")
   expect_identical(readLines(file.path(fixture$directory, "effect")), "effect")
   expect_equal(ca_inspect(fixture$db, id)$result, 42)
   expect_identical(ca_inspect(fixture$db, id)$failures, 1L)
@@ -169,6 +203,6 @@ local({
   withr::defer(ca_close(client))
   expect_identical(ca_run(ca_claim(client), function(input, ctx) {
     ca_step(ctx, "saved", function() stop("persisted step must replay"))
-  }), "completed")
+  })$status, "completed")
   expect_equal(ca_inspect(client, "restart")$result, 42)
 })

@@ -9,7 +9,7 @@ ca_step(task, name, fn)
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
-\item{name}{Stable checkpoint name, at most 256 characters.}
+\item{name}{Stable checkpoint name.}
 
 \item{fn}{Zero-argument function returning a JSON-compatible value.}
 }

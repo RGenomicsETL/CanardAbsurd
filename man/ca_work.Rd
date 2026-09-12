@@ -12,7 +12,10 @@ ca_work(
   poll_seconds = 0.1,
   idle_timeout = Inf,
   lease_seconds = 30,
-  worker = paste0("R-", Sys.getpid())
+  worker = paste0("R-", Sys.getpid()),
+  reap_limit = 64L,
+  failure_delay = 0,
+  on_result = NULL
 )
 }
 \arguments{
@@ -34,9 +37,22 @@ suspensions. \code{Inf} runs without an attempt limit.}
 must explicitly heartbeat before this interval expires.}
 
 \item{worker}{Worker label used for inspection; lease tokens establish ownership.}
+
+\item{reap_limit}{Maximum exhausted, expired leases to mark failed before each
+claim. Batching bounds contention with other workers; it does not limit
+recovery of leases that still have failure budget.}
+
+\item{failure_delay}{Nonnegative seconds before a failed task can be claimed
+again. This is separate from caller-managed SQL conflict retries.}
+
+\item{on_result}{Optional function called with each \code{\link[=ca_run]{ca_run()}} outcome after
+persistence, outside the handler's error boundary. The default warns about
+handler failures with \code{canard_task_failed}. A supplied callback owns outcome
+reporting instead. Errors from the callback propagate to the caller.}
 }
 \value{
-The number of executed attempts, invisibly.
+The number of executed attempts, invisibly. Use \code{on_result} to collect
+outcomes without accumulating an unbounded result list inside the worker.
 }
 \description{
 Each worker executes one attempt at a time. Scale with independent R processes

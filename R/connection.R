@@ -1,12 +1,3 @@
-CanardConnection <- S7::new_class(
-  "CanardConnection", package = "CanardAbsurd",
-  properties = list(
-    con = S7::class_any,
-    uri = S7::new_property(S7::class_character, default = ""),
-    server = S7::new_property(S7::class_logical, default = FALSE)
-  )
-)
-
 #' Open a local workflow database
 #'
 #' Installs schema version 1 in a transaction, or checks the existing version.
@@ -24,11 +15,11 @@ CanardConnection <- S7::new_class(
 #' ca_inspect(db, id)$result
 #' ca_close(db)
 ca_open <- function(path = ":memory:") {
-  stopifnot(is.character(path), length(path) == 1L, !is.na(path), nzchar(path))
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = path,
+  request <- .ca_input(CanardDatabase, path = path)
+  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = request@path,
     config = list(autoinstall_known_extensions = "false"))
-  ready <- FALSE
-  on.exit(if (!ready) DBI::dbDisconnect(con, shutdown = TRUE))
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  db <- CanardConnection(con = con, query = function(sql) DBI::dbGetQuery(con, sql))
   schema <- readLines(system.file("sql", "schema.sql", package = "CanardAbsurd",
     mustWork = TRUE), warn = FALSE)
   DBI::dbWithTransaction(con, {
@@ -37,24 +28,29 @@ ca_open <- function(path = ":memory:") {
         AND table_name = 'schema_version'")$n[[1L]]
     if (installed == 1L) {
       version <- DBI::dbGetQuery(con, "SELECT version FROM canard_absurd.schema_version")
-      if (!identical(version$version, 1L)) stop("Unsupported CanardAbsurd schema version")
+      if (!identical(version$version, 1L)) {
+        stop(errorCondition("Unsupported CanardAbsurd schema version",
+          class = c("canard_schema_error", "canard_error"), version = version$version))
+      }
     }
     for (sql in strsplit(paste(schema, collapse = "\n"), ";", fixed = TRUE)[[1L]]) {
       if (nzchar(trimws(sql))) DBI::dbExecute(con, sql)
     }
   })
-  ready <- TRUE
-  CanardConnection(con = con)
+  on.exit(NULL)
+  db
 }
 
 .ca_load_quack <- function(con, extension) {
-  target <- "quack"
-  if (!is.null(extension)) {
-    target <- DBI::dbQuoteString(con, normalizePath(extension, mustWork = TRUE))
-  }
-  tryCatch(DBI::dbExecute(con, paste("LOAD", target)), error = function(e) {
-    stop("Quack must be installed explicitly for this DuckDB runtime: ",
-      conditionMessage(e), call. = FALSE)
+  tryCatch({
+    target <- "quack"
+    if (!is.null(extension)) {
+      target <- DBI::dbQuoteString(con, normalizePath(extension, mustWork = TRUE))
+    }
+    DBI::dbExecute(con, paste("LOAD", target))
+  }, error = function(e) {
+    stop(errorCondition(paste("Unable to load Quack:", conditionMessage(e)),
+      class = c("canard_extension_error", "canard_error"), parent = e))
   })
   invisible(NULL)
 }
@@ -73,18 +69,16 @@ ca_open <- function(path = ":memory:") {
 #' @return A local S7 `CanardConnection` handle owning the server.
 #' @export
 ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL) {
-  stopifnot(is.character(uri), length(uri) == 1L, !is.na(uri), nzchar(uri))
-  stopifnot(is.character(token), length(token) == 1L, !is.na(token), nzchar(token))
+  endpoint <- .ca_input(CanardEndpoint, uri = uri, token = token, extension = extension)
   db <- ca_open(path)
-  ready <- FALSE
-  on.exit(if (!ready) ca_close(db))
-  .ca_load_quack(db@con, extension)
+  on.exit(ca_close(db))
+  .ca_load_quack(db@con, endpoint@extension)
   sql <- DBI::sqlInterpolate(db@con,
-    "CALL quack_serve(?uri, token = ?token)", uri = uri, token = token)
+    "CALL quack_serve(?uri, token = ?token)", uri = endpoint@uri, token = endpoint@token)
   started <- DBI::dbGetQuery(db@con, sql)
   db@uri <- started$listen_uri[[1L]]
   db@server <- TRUE
-  ready <- TRUE
+  on.exit(NULL)
   db
 }
 
@@ -98,20 +92,24 @@ ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL
 #' @return An S7 `CanardConnection` handle.
 #' @export
 ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
-  stopifnot(is.character(uri), length(uri) == 1L, !is.na(uri), nzchar(uri))
-  stopifnot(is.character(token), length(token) == 1L, !is.na(token), nzchar(token))
+  endpoint <- .ca_input(CanardEndpoint, uri = uri, token = token, extension = extension)
   con <- DBI::dbConnect(duckdb::duckdb(),
     config = list(autoinstall_known_extensions = "false"))
-  ready <- FALSE
-  on.exit(if (!ready) DBI::dbDisconnect(con, shutdown = TRUE))
-  .ca_load_quack(con, extension)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  db <- CanardConnection(con = con, uri = uri,
+    query = function(sql) DBI::dbGetQuery(con, "SELECT * FROM quack_query(?, ?)",
+      params = list(uri, as.character(sql))))
+  .ca_load_quack(con, endpoint@extension)
   secret <- DBI::sqlInterpolate(con,
-    "CREATE SECRET (TYPE quack, TOKEN ?token, SCOPE ?uri)", token = token, uri = uri)
+    "CREATE SECRET (TYPE quack, TOKEN ?token, SCOPE ?uri)",
+    token = endpoint@token, uri = endpoint@uri)
   DBI::dbExecute(con, secret)
-  db <- CanardConnection(con = con, uri = uri)
   runtime <- ca_runtime(db)
-  if (!identical(runtime$schema_version, 1L)) stop("Unsupported CanardAbsurd schema version")
-  ready <- TRUE
+  if (!identical(runtime$schema_version, 1L)) {
+    stop(errorCondition("Unsupported CanardAbsurd schema version",
+      class = c("canard_schema_error", "canard_error"), version = runtime$schema_version))
+  }
+  on.exit(NULL)
   db
 }
 
@@ -120,7 +118,6 @@ ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
 #' @return `NULL`, invisibly. Closing an already closed handle is harmless.
 #' @export
 ca_close <- function(db) {
-  stopifnot(S7::S7_inherits(db, CanardConnection))
   if (!DBI::dbIsValid(db@con)) return(invisible(NULL))
   on.exit(DBI::dbDisconnect(db@con, shutdown = TRUE))
   if (db@server) {
