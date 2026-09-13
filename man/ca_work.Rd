@@ -46,9 +46,9 @@ recovery of leases that still have failure budget.}
 again. This is separate from caller-managed SQL conflict retries.}
 
 \item{on_result}{Optional function called with each \code{\link[=ca_run]{ca_run()}} outcome after
-persistence, outside the handler's error boundary. The default warns about
-handler failures with \code{canard_task_failed}. A supplied callback owns outcome
-reporting instead. Errors from the callback propagate to the caller.}
+persistence. The default warns about handler failures with
+\code{canard_task_failed}. A supplied callback owns outcome reporting instead.
+Errors from the callback propagate to the caller.}
 }
 \value{
 The number of executed attempts, invisibly. Use \code{on_result} to collect
@@ -56,7 +56,7 @@ outcomes without accumulating an unbounded result list inside the worker.
 }
 \description{
 Each worker executes one attempt at a time. Scale with independent R processes
-connected through Quack. Only registered handler names are claimed. Heartbeats
-occur at step boundaries and through \code{\link[=ca_heartbeat]{ca_heartbeat()}}, not on a background R
-thread. The worker never terminates its host process on lease loss.
+connected through Quack. Only registered handler names are claimed. Calls to
+named steps and \code{\link[=ca_heartbeat]{ca_heartbeat()}} renew leases; no background R thread does so.
+The worker never terminates its host process on lease loss.
 }

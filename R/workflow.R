@@ -123,9 +123,9 @@ ca_run <- function(task, handler, failure_delay = 0) {
 #' Pull and execute R tasks
 #'
 #' Each worker executes one attempt at a time. Scale with independent R processes
-#' connected through Quack. Only registered handler names are claimed. Heartbeats
-#' occur at step boundaries and through [ca_heartbeat()], not on a background R
-#' thread. The worker never terminates its host process on lease loss.
+#' connected through Quack. Only registered handler names are claimed. Calls to
+#' named steps and [ca_heartbeat()] renew leases; no background R thread does so.
+#' The worker never terminates its host process on lease loss.
 #'
 #' @inheritParams ca_claim
 #' @inheritParams ca_run
@@ -136,9 +136,9 @@ ca_run <- function(task, handler, failure_delay = 0) {
 #' @param idle_timeout Nonnegative seconds without a claim before returning.
 #'   `Inf` waits indefinitely. Zero drains currently eligible work.
 #' @param on_result Optional function called with each [ca_run()] outcome after
-#'   persistence, outside the handler's error boundary. The default warns about
-#'   handler failures with `canard_task_failed`. A supplied callback owns outcome
-#'   reporting instead. Errors from the callback propagate to the caller.
+#'   persistence. The default warns about handler failures with
+#'   `canard_task_failed`. A supplied callback owns outcome reporting instead.
+#'   Errors from the callback propagate to the caller.
 #' @return The number of executed attempts, invisibly. Use `on_result` to collect
 #'   outcomes without accumulating an unbounded result list inside the worker.
 #' @export

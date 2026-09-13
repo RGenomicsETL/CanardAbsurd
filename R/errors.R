@@ -1,4 +1,4 @@
-# Compatibility boundary for duckdb/duckdb-r#2711 and duckdb/duckdb-quack#212.
+# Compatibility handling for duckdb/duckdb-r#2711 and duckdb/duckdb-quack#212.
 # Message forms are fixtures, not a stable upstream contract. Unknown forms fail closed.
 .ca_storage_error <- function(error, operation, attempts, elapsed, id = NULL) {
   failure <- errorCondition(conditionMessage(error),

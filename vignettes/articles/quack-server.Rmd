@@ -5,43 +5,59 @@ title: "A Quack server and R workers"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
-library(CanardAbsurd)
-path <- tempfile(fileext = ".duckdb")
-withr::defer(unlink(c(path, paste0(path, ".wal"))))
-uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
 ```
 
-One process owns the writable DuckDB file. Quack exposes remote SQL access;
-clients use their own in-memory DuckDB connection to reach it. R handlers execute
-in those clients, not in server callbacks.
+Quack is required for a shared workflow database. One server process owns the
+writable DuckDB file; producers and workers use their own
+in-memory DuckDB connections to send SQL through Quack. They must not open the
+server's database file directly: multi-process file access causes DuckDB/WAL
+contention and locking errors. R handlers execute in those clients, never in a
+server callback.
 
-This article starts a real temporary server and executes a worker over Quack.
-All R chunks run during the site build. Quack must be explicitly installed for
-the R DuckDB runtime before rendering; `make quack` provides that setup in this
-checkout. This network-dependent article is built by pkgdown, while the package
-vignettes run offline.
+This article starts a temporary server and executes a worker over Quack. It
+puts both handles in one R process so the evaluated guide does not need to start
+a separate shell process; the connections still communicate through a Quack
+endpoint. Production deployment separates the server and
+workers as described below. This network-dependent article is built by pkgdown,
+while the package vignettes run offline.
+
+## Install the runtime
+
+Install DuckDB's JSON and Quack extensions explicitly before serving or
+connecting. From a source checkout, `make quack` performs this setup. In another
+R environment, run this once with network access:
+
+```r
+dir.create(path.expand("~/.duckdb"), recursive = TRUE, showWarnings = FALSE)
+local({
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSTALL json")
+  DBI::dbExecute(con, "INSTALL quack")
+})
+```
+
+The extensions are stored in DuckDB's shared extension directory so later R
+processes using the same DuckDB runtime can load them. Package loading and
+connections never download extensions.
 
 ## Run the server/client path
 
 The demonstration uses a disposable localhost token. Use a securely supplied
-nonempty token and a controlled network address for a deployment.
-
-Here `path` is a temporary database file and `uri` is an available localhost
-endpoint chosen for the render.
+nonempty token and a controlled network address for a deployment. Here `path`
+is a temporary database file and `uri` is an available localhost endpoint.
 
 ```{r server}
+library(CanardAbsurd)
+path <- tempfile(fileext = ".duckdb")
+withr::defer(unlink(c(path, paste0(path, ".wal"))))
+uri <- sprintf("quack:127.0.0.1:%d", parallelly::freePort())
 server <- ca_serve(path, uri, token = "article-local-only")
-```
-
-```{r server-cleanup, include=FALSE}
 withr::defer(ca_close(server))
 ```
 
 ```{r client}
 worker <- ca_connect(uri, token = "article-local-only")
-```
-
-```{r client-cleanup, include=FALSE}
 withr::defer(ca_close(worker))
 ```
 
@@ -51,7 +67,7 @@ sum_values <- function(input, ctx) {
 }
 id <- ca_spawn(worker, "sum", list(values = list(10, 20, 12)),
                id = "remote-sum-001", queue = "reports")
-delays <- runif(3, 0, 0.1)
+delays <- c(0.01, 0.05, 0.1)
 withCallingHandlers(
   ca_work(worker, list(sum = sum_values), queue = "reports", max_tasks = 1),
   canard_retryable = function(conflict) {
@@ -66,19 +82,19 @@ list(runtime = ca_runtime(worker), state = task$state, result = task$result)
 ```
 
 These are independent database connections in one R process, communicating
-through a real Quack endpoint. The `tinytest` suite also executes workers in
+through a Quack endpoint. The `tinytest` suite also executes workers in
 independent R processes and kills worker and database-host processes to test
 recovery.
 
 ## Deploy across processes
 
 Use the same `ca_serve()` call in a long-lived server R process, with a persistent
-database path. The process must remain alive to serve requests. Worker processes
-call `ca_connect()` with that endpoint and token, register their handler lists,
-and enter `ca_work()`.
+database path. It is the only process that opens that file and it must remain
+alive to serve requests. Every producer and worker calls `ca_connect()` with the
+endpoint and token; workers register their handler lists and enter `ca_work()`.
 
 Each worker executes one attempt at a time. `lease_seconds` must cover the time
-between step boundaries or explicit heartbeats. `poll_seconds` controls idle
+between named checkpoint calls or explicit heartbeats. `poll_seconds` controls idle
 polling, and `idle_timeout` controls when an idle worker returns. A worker that
 only knows one handler will not claim other task names.
 

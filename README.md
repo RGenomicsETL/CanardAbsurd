@@ -6,23 +6,29 @@
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
 [![R-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
 
-**Durable R workflows. DuckDB owns the state; Quack serves it.**
+**Durable R workflows with a single DuckDB owner. Quack serves it.**
 
-One R package hosts the database and supplies thin R clients. Workers
-pull leased tasks, run ordinary R functions, and save named step results
-for replay.
+Use CanardAbsurd when R work must survive an interrupted worker, pause
+until a later time, and resume without redoing completed named steps.
+Workers claim leased tasks, run R functions, and save each step result
+in DuckDB.
+
+A Quack server is mandatory for a shared workflow database. One server
+process owns the writable DuckDB file; producers and workers send SQL
+through Quack rather than opening that file themselves. This avoids
+direct multi-process DuckDB/WAL contention and the resulting locking
+errors. External effects still need application-level idempotency.
 
 ## Lineage: Absurd, expressed through R
 
 [Absurd](https://github.com/earendil-works/absurd), from [Earendil
-Works](https://github.com/earendil-works), establishes the central idea:
-durable execution can live in a database, with ordinary functions
-replaying named checkpoints after interruption. CanardAbsurd adapts that
-model to **R handlers, DuckDB state, and Quack remote SQL**.
+Works](https://github.com/earendil-works), uses database-backed
+checkpoint replay: functions resume from named checkpoints after
+interruption. CanardAbsurd adapts that model to **R handlers, DuckDB
+state, and Quack remote SQL**.
 
 The shared lineage is the execution model, not PostgreSQL schema or SDK
 wire compatibility. CanardAbsurd owns its SQL state machine and R API.
-External effects still require application-level idempotency.
 
 ``` mermaid
 flowchart LR
@@ -42,13 +48,20 @@ reference](https://rgenomicsetl.github.io/CanardAbsurd/reference/index.html)
 
 ## Install
 
-Install [CanardAbsurd from
-R-universe](https://rgenomicsetl.r-universe.dev/CanardAbsurd), or run
-`R CMD INSTALL .` from a source checkout. Follow the [runtime setup
-instructions](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html)
-to install DuckDB’s JSON and Quack extensions.
+Install with
+`install.packages("CanardAbsurd", repos = "https://rgenomicsetl.r-universe.dev")`.
+A shared workflow database also requires explicitly installed DuckDB
+JSON and Quack extensions; follow the [Quack runtime setup
+instructions](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html#install-the-runtime).
 
 ## Start a server and connect a client
+
+This walkthrough runs the server and client in one R process, but they
+are independent DuckDB connections communicating through a Quack
+endpoint. Deploy the server in its own long-lived process and connect
+producers and workers from separate R processes as described in the
+[Quack deployment
+guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html#deploy-across-processes).
 
 Choose a temporary database file, an available localhost port, and a
 shared authentication token for this example. Register cleanup as
@@ -180,8 +193,8 @@ dir.create(receipt_dir)
 withr::defer(unlink(receipt_dir, recursive = TRUE))
 ```
 
-To expose the write/checkpoint gap, this callback deliberately raises a
-classed error after its first file write.
+To expose the write/checkpoint gap, this callback raises a classed error
+after its first file write.
 
 ``` r
 publish <- function(input, ctx) {
@@ -358,9 +371,11 @@ ca_close(client)
 ca_close(server)
 ```
 
-For an embedded database without a server, `ca_open()` provides the same
-task API. In a deployment, keep the server in one long-lived R process
-and run independent workers with `ca_connect()` and `ca_work()`.
+`ca_open()` is for a single-process workflow, such as an offline test or
+script; do not share its database file with other R processes. For any
+shared workflow database, keep the Quack server in one long-lived R
+process and run independent producers and workers with `ca_connect()`
+and `ca_work()`.
 
 See [Durability and
 recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html)
@@ -379,9 +394,9 @@ restrictions, and TLS.
 `make docs` evaluates the README, renders a litedown landing page, and
 builds pkgdown guides and reference pages. `make check` builds and
 checks the source package, including its evaluated vignettes.
-`make test` runs `tinytest`, real multi-process Quack tests, and
-`s7contract` laws. The Quack tests cover competing claims, worker and
-database-host crashes, and stale completions.
+`make test` runs `tinytest`, multi-process Quack tests, and `s7contract`
+laws. The Quack tests cover competing claims, worker and database-host
+crashes, and stale completions.
 
 Licensed under
 [GPL-2-or-later](https://github.com/RGenomicsETL/CanardAbsurd/blob/main/LICENSE.md).

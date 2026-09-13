@@ -10,23 +10,22 @@ vignette: >
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
-library(CanardAbsurd)
 ```
 
 A workflow is an R function taking `(input, ctx)`. `ca_spawn()` stores its name
 and JSON input; `ca_work()` finds the corresponding function in a named list.
 
-This guide uses an in-memory database. All examples execute during rendering,
-without network access or a Quack installation. The same workflow functions run
-against a remote connection made with `ca_connect()`.
+This guide uses an in-memory database to introduce the handler contract without
+network access or a Quack installation. It is a one-process example: no other
+R process accesses this database. For a shared workflow
+database, Quack is mandatory: one server process owns the writable DuckDB file,
+and producers and workers use `ca_connect()` rather than opening that file.
 
-## Run a task
+## Run a local, single-process task
 
 ```{r open}
+library(CanardAbsurd)
 db <- ca_open()
-```
-
-```{r cleanup, include=FALSE}
 withr::defer(ca_close(db))
 ```
 
@@ -82,7 +81,7 @@ data.frame(state = task$state, attempts = task$attempt,
 handler condition on failure. Without a callback, the worker warns on failures.
 `failure_delay` controls when a failed task becomes eligible again; its default
 is zero. The local counters expose which callbacks ran; they are not durable
-workflow state. Actual durable results live in the database.
+workflow state. Durable results live in the database.
 
 ## Sleep without occupying a worker
 
@@ -114,7 +113,8 @@ Each worker runs one attempt at a time. For concurrency, run independent R
 processes connected to a Quack server. Only names present in `handlers` are
 claimed. See the [Quack server guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html).
 
-Close the connection when finished:
+Close the one-process connection when finished. The deferred cleanup also
+closes it if a later example errors.
 
 ```{r close}
 ca_close(db)

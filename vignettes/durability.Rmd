@@ -10,19 +10,38 @@ vignette: >
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
+```
+
+## Guarantees and limits
+
+CanardAbsurd provides at-least-once task execution with durable named
+checkpoints. A task input, state, lease, counters, and completed step results
+survive a worker failure. A replacement worker resumes the handler and replays
+those completed steps. Completed, failed, and cancelled tasks are terminal.
+
+This is not exactly-once execution of external effects. A worker can call an
+external service and fail before its step result is saved; a later attempt then
+calls that service again. Use an application-level idempotency key for every
+external mutation.
+
+For a shared workflow database, run one Quack server process as the writable
+DuckDB owner. Producers and workers connect through Quack rather than opening
+the database file themselves, avoiding direct multi-process DuckDB/WAL locking
+and errors.
+
+## Run the examples
+
+The examples use `ca_open()` only to inspect the state machine without a network
+or Quack installation. This in-memory database belongs to this one R process;
+it is not a shared deployment.
+
+```{r open}
 library(CanardAbsurd)
 db <- ca_open()
 withr::defer(ca_close(db))
 ```
 
-## What is durable?
-
-DuckDB stores each task's inputs, state, lease token, counters, and checkpoint
-map. The R handler runs outside a database transaction. Each state transition
-is a server-side SQL statement. Callers can handle `canard_retryable` and invoke
-its `canard_retry` restart to repeat a known aborted write conflict. Without that
-explicit decision, the error propagates. A network failure does not prove that
-a request was never executed.
+## How task state changes
 
 ```mermaid
 stateDiagram-v2
@@ -37,14 +56,18 @@ stateDiagram-v2
   running --> cancelled: cancel
 ```
 
-Completed, failed, and cancelled tasks are terminal. Recovery replaces an expired
-lease when the failure budget allows another attempt.
+Each state transition is one server-side SQL statement; the R handler never
+runs inside its transaction. A network failure does not prove that a request was
+never executed. Callers can handle `canard_retryable` and invoke its
+`canard_retry` restart to repeat a known aborted write conflict. Without that
+explicit decision, the error propagates.
 
-The `attempt` counter counts claims, including sleep resumptions. The `failures`
-counter counts reported failures and expired leases. `max_failures` is the
-threshold for terminal failure. Reaping happens on the claim path, so an expired
-last attempt is marked failed when workers next poll its queue. `reap_limit`
-controls the size of that maintenance batch; its default is 64 rows.
+Recovery replaces an expired lease when the failure budget allows another
+attempt. The `attempt` counter counts claims, including sleep resumptions. The
+`failures` counter counts reported failures and expired leases. `max_failures`
+is the threshold for terminal failure. Reaping happens on the claim path, so an
+expired last attempt is marked failed when workers next poll its queue.
+`reap_limit` controls the size of that maintenance batch; its default is 64 rows.
 
 ## A replaced claim cannot write
 
@@ -115,7 +138,7 @@ objects. See `?ca_conditions` for the condition fields and retry notifications.
 
 ## Error metadata compatibility
 
-Two upstream boundaries lose structured information:
+Two upstream paths discard structured information:
 
 - [DuckDB R #2711](https://github.com/duckdb/duckdb-r/issues/2711): the DBI rethrow
   discards the original error fields and parent.
@@ -133,8 +156,7 @@ supplied it. Structured non-transaction types take precedence over the text.
 This is a workaround for released drivers, **not a stable error protocol**.
 Changed or unknown message forms propagate without a retry restart, as do
 transport failures. An unhandled recognized conflict also propagates: retry
-limits and delays still belong to the caller. Revalidate against the actual
-DuckDB/Quack pair when upgrading; the integration suite uses installed packages
+limits and delays still belong to the caller. Revalidate against the DuckDB/Quack pair in deployment when upgrading; the integration suite uses installed packages
 and independent R processes. Tests exercise DuckDB R 1.5.3 and 1.5.5 and the
 community Quack builds available for them.
 
@@ -146,11 +168,11 @@ with DuckDB. Use a stable business-level idempotency key for payments, messages,
 and other mutations. Deduplicating task submission does not deduplicate those
 external effects.
 
-Long operations must call `ca_heartbeat(ctx)` before their lease expires. Step
-boundaries renew leases, but no background R thread renews a lease while a
-callback blocks.
+Long operations must call `ca_heartbeat(ctx)` before their lease expires. Calls
+to `ca_step()` and `ca_sleep()` renew leases, but no background R thread renews
+a lease while a callback blocks.
 
-## Operational boundaries
+## Operational limits
 
 - Checkpoints share the task row so lease changes and checkpoint writes contend
   on the same durable record. This trades whole-row JSON updates for a simple
@@ -166,4 +188,10 @@ callback blocks.
 - Schema version 1 is checked at open/connect time. Events, cron, automatic
   retention, history tables, and schema migrations are outside this release.
 - Quack is experimental. Record `ca_runtime()` when validating a deployment;
-  compatibility depends on the actual DuckDB and Quack pair.
+  compatibility depends on the DuckDB and Quack versions in deployment.
+
+## Close the example database
+
+```{r close}
+ca_close(db)
+```
