@@ -12,8 +12,8 @@ ca_inspect(db, id)
 \item{id}{Stable task ID (1 to 256 characters), or \code{NULL} to generate a UUID.}
 }
 \value{
-A named list containing task state, counters, timestamps, and decoded
-JSON input, result, and checkpoint records; \code{NULL} for an unknown ID.
+A named list containing task state, counters, timestamps, decoded
+JSON input and result, and checkpoint records; \code{NULL} for an unknown ID.
 }
 \description{
 Inspect a task

@@ -8,8 +8,8 @@
 #' @inheritParams ca_close
 #' @param name Registered handler name.
 #' @param input JSON-compatible R value. Schema version 1 limits each input to
-#'   1 MiB of UTF-8 JSON and the accumulated checkpoint document to 16 MiB.
-#'   These server-side limits also apply to direct SQL clients.
+#'   1 MiB of UTF-8 JSON and each task's checkpoint map to 16 MiB. These
+#'   server-side limits also apply to direct SQL clients.
 #' @param queue Queue name.
 #' @param id Stable task ID (1 to 256 characters), or `NULL` to generate a UUID.
 #' @param priority Integer priority; larger values are claimed first.
@@ -64,12 +64,13 @@ ca_claim <- function(db, queue = "default", worker = paste0("R-", Sys.getpid()),
 
 .ca_claimant <- function(request) {
   db <- request@db
-  names_json <- DBI::SQL("NULL")
+  task_names <- DBI::SQL("NULL")
   if (!is.null(request@task_names)) {
-    names_json <- as.character(jsonlite::toJSON(request@task_names, auto_unbox = FALSE))
+    quoted <- DBI::dbQuoteString(db@con, request@task_names)
+    task_names <- DBI::SQL(paste0("[", paste(quoted, collapse = ", "), "]"))
   }
   params <- list(queue = request@queue, worker = request@worker,
-    lease_seconds = request@lease_seconds, names = names_json)
+    lease_seconds = request@lease_seconds, names = task_names)
   reap <- list(queue = request@queue, reap_limit = request@reap_limit)
   function() {
     .ca_query(db, "reap", reap)
@@ -84,19 +85,33 @@ ca_claim <- function(db, queue = "default", worker = paste0("R-", Sys.getpid()),
 
 #' Inspect a task
 #' @inheritParams ca_spawn
-#' @return A named list containing task state, counters, timestamps, and decoded
-#'   JSON input, result, and checkpoint records; `NULL` for an unknown ID.
+#' @return A named list containing task state, counters, timestamps, decoded
+#'   JSON input and result, and checkpoint records; `NULL` for an unknown ID.
 #' @export
 ca_inspect <- function(db, id) {
   request <- .ca_input(CanardLookup, db = db, id = id)
   rows <- .ca_query(request@db, "inspect", list(id = request@id))
   if (nrow(rows) == 0L) return(NULL)
-  record <- as.list(rows[1L, , drop = FALSE])
-  for (field in c("input", "result", "checkpoints")) {
+
+  checkpoint_columns <- c("checkpoint_name", "checkpoint_kind",
+    "checkpoint_json", "checkpoint_ordinal")
+  record <- as.list(rows[1L, setdiff(names(rows), checkpoint_columns), drop = FALSE])
+  for (field in c("input", "result")) {
     value <- record[[field]]
     record[field] <- list(if (is.na(value)) NULL else
       jsonlite::fromJSON(value, simplifyVector = FALSE))
   }
+
+  present <- which(!is.na(rows$checkpoint_name))
+  checkpoints <- lapply(present, function(index) {
+    checkpoint <- list(kind = rows$checkpoint_kind[[index]])
+    if (!is.na(rows$checkpoint_json[[index]])) {
+      checkpoint$json <- rows$checkpoint_json[[index]]
+    }
+    checkpoint
+  })
+  names(checkpoints) <- rows$checkpoint_name[present]
+  record["checkpoints"] <- list(checkpoints)
   record
 }
 

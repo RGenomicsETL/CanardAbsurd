@@ -9,17 +9,17 @@ output: github_document
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
 [![R-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
 
-**Durable R workflows with a single DuckDB owner. Quack serves it.**
+CanardAbsurd records queued R jobs in DuckDB. A worker claims a task, saves the
+result of each named step, and another worker can continue after the first one
+exits.
 
-Use CanardAbsurd when R work must survive an interrupted worker, pause until a
-later time, and resume without redoing completed named steps. Workers claim
-leased tasks, run R functions, and save each step result in DuckDB.
+For a database shared by more than one process, run a Quack server. It is the
+only process that opens the database file; producers and workers connect to it
+through Quack. This prevents competing file access and DuckDB/WAL locking.
 
-A Quack server is mandatory for a shared workflow database. One server process
-owns the writable DuckDB file; producers and workers send SQL through Quack
-rather than opening that file themselves. This avoids direct multi-process
-DuckDB/WAL contention and the resulting locking errors. External effects still
-need application-level idempotency.
+A worker can finish an external action and exit before saving its checkpoint.
+Give each external action an idempotency key so that a later attempt can safely
+repeat it.
 
 ## Lineage: Absurd, expressed through R
 
@@ -49,7 +49,7 @@ flowchart LR
 
 Install with `install.packages("CanardAbsurd", repos =
 "https://rgenomicsetl.r-universe.dev")`. A shared workflow database also
-requires explicitly installed DuckDB JSON and Quack extensions; follow the
+requires an explicitly installed DuckDB Quack extension; follow the
 [Quack runtime setup instructions](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html#install-the-runtime).
 
 ## Start a server and connect a client

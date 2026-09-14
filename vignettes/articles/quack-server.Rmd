@@ -23,16 +23,15 @@ while the package vignettes run offline.
 
 ## Install the runtime
 
-Install DuckDB's JSON and Quack extensions explicitly before serving or
-connecting. From a source checkout, `make quack` performs this setup. In another
-R environment, run this once with network access:
+Install DuckDB's Quack extension explicitly before serving or connecting. From
+a source checkout, `make quack` performs this setup. In another R environment,
+run this once with network access:
 
 ```r
 dir.create(path.expand("~/.duckdb"), recursive = TRUE, showWarnings = FALSE)
 local({
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbExecute(con, "INSTALL json")
   DBI::dbExecute(con, "INSTALL quack")
 })
 ```

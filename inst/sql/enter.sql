@@ -5,5 +5,5 @@ SET lease_until = greatest(lease_until,
 WHERE id = ?id AND token = ?token::UUID AND state = 'running'
     AND lease_until > current_timestamp
 RETURNING 1 AS changed, id,
-    json_extract(checkpoints, '/' || replace(replace(?name, '~', '~0'), '/', '~1'))::VARCHAR
-        AS checkpoint;
+    (map_extract_value(checkpoints, ?name)).kind AS checkpoint_kind,
+    (map_extract_value(checkpoints, ?name)).json AS checkpoint_json;

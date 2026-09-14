@@ -1,5 +1,5 @@
 UPDATE canard_absurd.tasks
-SET state = 'completed', result = ?result::JSON, error = NULL,
+SET state = 'completed', result = ?result, error = NULL,
     worker = NULL, token = NULL, lease_until = NULL,
     updated_at = current_timestamp
 WHERE id = ?id AND token = ?token::UUID AND state = 'running'

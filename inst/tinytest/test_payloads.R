@@ -13,15 +13,28 @@ local({
     calls <<- calls + 1L
     value
   }), value)
+  task_row <- DBI::dbGetQuery(db@con,
+    "SELECT input, state FROM canard_absurd.tasks WHERE id = ?", params = list(id))
+  expect_identical(task_row$state, "running")
+  expect_identical(jsonlite::fromJSON(task_row$input[[1L]]), value)
+  checkpoint <- DBI::dbGetQuery(db@con,
+    "SELECT name, kind, value_json FROM canard_absurd.task_checkpoints WHERE task_id = ?",
+    params = list(id))
+  expect_identical(checkpoint$name, key)
+  expect_identical(checkpoint$kind, "step")
+  expect_identical(jsonlite::fromJSON(checkpoint$value_json[[1L]]), value)
   ca_fail(task, "retry")
   task <- ca_claim(db)
   expect_identical(ca_step(task, key, function() stop("must replay")), value)
   expect_identical(calls, 1L)
   ca_complete(task, value)
-  expect_identical(ca_inspect(db, id)$result, value)
+  record <- ca_inspect(db, id)
+  expect_identical(record$checkpoints[[key]]$kind, "step")
+  expect_identical(jsonlite::fromJSON(record$checkpoints[[key]]$json), value)
+  expect_identical(record$result, value)
 })
 
-# Storage bounds apply to the server's input and accumulated checkpoint document.
+# Storage bounds apply to input and each task's checkpoint map.
 local({
   db <- local_database()
   expect_error(ca_spawn(db, "work", strrep("x", 1048576L)), class = "canard_storage_error")
@@ -58,6 +71,8 @@ local({
   expect_identical(names(reply), c("changed", "id"))
   expect_equal(reply$changed, 1)
   expect_identical(ca_step(task, "first", function() stop("must replay")), 1L)
-  expect_identical(names(reply), c("changed", "id", "checkpoint"))
-  expect_false(grepl("second", reply$checkpoint, fixed = TRUE))
+  expect_identical(names(reply),
+    c("changed", "id", "checkpoint_kind", "checkpoint_json"))
+  expect_identical(reply$checkpoint_kind, "step")
+  expect_identical(reply$checkpoint_json, "1")
 })

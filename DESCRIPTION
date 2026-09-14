@@ -14,13 +14,13 @@ URL: https://rgenomicsetl.github.io/CanardAbsurd/,
 BugReports: https://github.com/RGenomicsETL/CanardAbsurd/issues
 Encoding: UTF-8
 Depends: R (>= 4.3.0)
-Imports: DBI, duckdb (>= 1.5.3), jsonlite, S7, stats
+Imports: DBI, duckdb (>= 1.5.3), jsonlite, S7
 Suggests: callr, tinytest, roxygen2, s7contract (>= 0.2.1), withr,
     knitr, rmarkdown, parallelly
 VignetteBuilder: knitr
 Config/Needs/website: pkgdown, litedown
 Config/Needs/graphics: rsvg
 Roxygen: list(markdown = TRUE)
-SystemRequirements: The JSON extension matching the installed DuckDB runtime;
-    the matching Quack extension for remote clients and database hosting
+SystemRequirements: The Quack extension matching the installed DuckDB runtime,
+    for remote clients and database hosting
 Config/roxygen2/version: 8.0.0

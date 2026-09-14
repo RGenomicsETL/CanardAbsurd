@@ -20,8 +20,8 @@ ca_spawn(
 \item{name}{Registered handler name.}
 
 \item{input}{JSON-compatible R value. Schema version 1 limits each input to
-1 MiB of UTF-8 JSON and the accumulated checkpoint document to 16 MiB.
-These server-side limits also apply to direct SQL clients.}
+1 MiB of UTF-8 JSON and each task's checkpoint map to 16 MiB. These
+server-side limits also apply to direct SQL clients.}
 
 \item{queue}{Queue name.}
 

@@ -4,9 +4,11 @@
       class = c("canard_replay_error", "canard_error"), id = task@id, name = name))
   }
   rows <- .ca_owned(task, "enter", name = name, seconds = task@lease_seconds)
-  checkpoint <- rows$checkpoint[[1L]]
-  saved <- if (is.na(checkpoint)) NULL else
-    jsonlite::fromJSON(checkpoint, simplifyVector = FALSE)
+  saved_kind <- rows$checkpoint_kind[[1L]]
+  saved <- if (is.na(saved_kind)) NULL else list(kind = saved_kind)
+  if (!is.null(saved) && !is.na(rows$checkpoint_json[[1L]])) {
+    saved$json <- rows$checkpoint_json[[1L]]
+  }
   if (!is.null(saved) && !identical(saved$kind, kind)) {
     stop(errorCondition(paste("Checkpoint kind differs for step:", name),
       class = c("canard_replay_error", "canard_error"),
@@ -25,8 +27,8 @@
 #' Step names must be unique in an attempt and stable across deployments. Include
 #' an explicit index for repeated steps in a loop. Checkpoint results must remain
 #' compatible with handlers that can resume existing tasks. Schema version 1
-#' limits the accumulated checkpoint document, including escaped value JSON and
-#' record keys, to 16 MiB. There is no additional per-step size limit.
+#' limits each task's checkpoint map to 16 MiB. There is no additional per-step
+#' size limit.
 #'
 #' @inheritParams ca_heartbeat
 #' @param name Stable checkpoint name.
@@ -42,8 +44,8 @@ ca_step <- function(task, name, fn) {
     return(jsonlite::fromJSON(saved$json, simplifyVector = FALSE))
   }
   encoded <- .ca_json(request@fn())
-  patch <- .ca_json(stats::setNames(list(list(kind = "step", json = encoded)), name))
-  .ca_owned(task, "checkpoint", patch = patch, seconds = task@lease_seconds)
+  .ca_owned(request@task, "checkpoint", name = request@name, json = encoded,
+    seconds = request@task@lease_seconds)
   jsonlite::fromJSON(encoded, simplifyVector = FALSE)
 }
 

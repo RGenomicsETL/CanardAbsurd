@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS canard_absurd.tasks (
     id VARCHAR PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 256),
     queue VARCHAR NOT NULL CHECK (length(queue) BETWEEN 1 AND 128),
     name VARCHAR NOT NULL CHECK (length(name) BETWEEN 1 AND 256),
-    input JSON NOT NULL,
+    input VARCHAR NOT NULL,
     priority INTEGER NOT NULL DEFAULT 0,
     state VARCHAR NOT NULL DEFAULT 'ready'
         CHECK (state IN ('ready', 'running', 'completed', 'failed', 'cancelled')),
@@ -20,12 +20,12 @@ CREATE TABLE IF NOT EXISTS canard_absurd.tasks (
     worker VARCHAR,
     token UUID,
     lease_until TIMESTAMPTZ,
-    checkpoints JSON NOT NULL DEFAULT '{}',
-    result JSON,
+    checkpoints MAP(VARCHAR, STRUCT(kind VARCHAR, json VARCHAR)) NOT NULL DEFAULT map(),
+    result VARCHAR,
     error VARCHAR,
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-    CHECK (octet_length(encode(input::VARCHAR)) <= 1048576),
+    CHECK (octet_length(encode(input)) <= 1048576),
     CHECK (octet_length(encode(checkpoints::VARCHAR)) <= 16777216),
     CHECK (
         (state = 'running' AND worker IS NOT NULL AND token IS NOT NULL
@@ -38,3 +38,12 @@ CREATE TABLE IF NOT EXISTS canard_absurd.tasks (
 
 CREATE INDEX IF NOT EXISTS canard_absurd_claim
 ON canard_absurd.tasks (queue, state, available_at);
+
+CREATE VIEW IF NOT EXISTS canard_absurd.task_checkpoints AS
+SELECT task.id AS task_id, checkpoint.entry.key AS name,
+    checkpoint.entry.value.kind AS kind,
+    checkpoint.entry.value.json AS value_json,
+    checkpoint.ordinal AS ordinal
+FROM canard_absurd.tasks AS task,
+    UNNEST(map_entries(task.checkpoints)) WITH ORDINALITY
+        AS checkpoint(entry, ordinal);

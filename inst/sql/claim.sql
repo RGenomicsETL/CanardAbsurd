@@ -9,7 +9,7 @@ WHERE id = (
     SELECT id FROM canard_absurd.tasks
     WHERE queue = ?queue
         AND (?names IS NULL OR name IN (
-            SELECT unnest(?names::JSON::VARCHAR[])
+            SELECT unnest(?names::VARCHAR[])
         ))
         AND (
             (state = 'ready' AND available_at <= current_timestamp)
@@ -19,4 +19,4 @@ WHERE id = (
     ORDER BY priority DESC, available_at, created_at, id
     LIMIT 1
 )
-RETURNING 1 AS changed, id, name, input::VARCHAR AS input, token::VARCHAR AS token, attempt;
+RETURNING 1 AS changed, id, name, input, token::VARCHAR AS token, attempt;

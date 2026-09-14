@@ -116,6 +116,32 @@ Step names must be unique within an attempt. Include a stable index for loop
 steps. Treat step names and result shapes as persistent interfaces when deploying
 new handler code.
 
+## Query workflow state with SQL
+
+Task state, queue, attempts, failures, and timestamps are typed columns. Inputs
+and results use JSON text rather than opaque R serialization so their contents
+remain visible to SQL. Checkpoint names and kinds are available through
+`canard_absurd.task_checkpoints`; its `value_json` column holds the encoded step
+value.
+
+```{r sql-inspection}
+DBI::dbGetQuery(db@con, "
+  SELECT state, count(*) AS tasks
+  FROM canard_absurd.tasks
+  GROUP BY state
+  ORDER BY state
+")
+DBI::dbGetQuery(db@con, "
+  SELECT name, kind, value_json
+  FROM canard_absurd.task_checkpoints
+  WHERE task_id = ?
+", params = list(id))
+```
+
+These queries need no DuckDB extensions. Analysts who explicitly install and
+load the JSON extension can cast `input`, `result`, or `value_json` to `JSON` for
+nested field extraction. CanardAbsurd does not load or install that extension.
+
 ## Inspect an attempt's failure
 
 A handler failure and a task's terminal failure are different events. `ca_run()`
@@ -175,11 +201,11 @@ a lease while a callback blocks.
 ## Operational limits
 
 - Checkpoints share the task row so lease changes and checkpoint writes contend
-  on the same durable record. This trades whole-row JSON updates for a simple
-  ownership invariant, not a throughput guarantee.
-- Schema version 1 limits input to 1 MiB of UTF-8 JSON and the accumulated
-  checkpoint document to 16 MiB, including escaped value JSON and record keys.
-  Results and error text have no additional package-imposed size cap.
+  on the same durable record. This keeps lease ownership and checkpoint storage
+  in one update; it is not a throughput guarantee.
+- Schema version 1 limits input to 1 MiB of UTF-8 JSON and each task's checkpoint
+  map to 16 MiB. Results and error text have no additional package-imposed size
+  cap.
 - Schema version 1 bounds task IDs and handler names to 256 characters, queue
   names to 128 characters, and failure budgets to 1 through 1,000,000. Changing
   those persisted constraints requires a schema change, not a client option.

@@ -14,5 +14,6 @@
 ^LICENSE\.md$
 ^tools$
 ^artifacts$
+^cran-comments\.md$
 ^.*\.Rcheck$
 ^CanardAbsurd_.*\.tar\.gz$
