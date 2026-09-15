@@ -1,6 +1,12 @@
 library(CanardAbsurd)
 source(system.file("tinytest", "helpers.R", package = "CanardAbsurd"), local = TRUE)
 
+case_collisions <- list(
+  list(A = 1L, a = 2L),
+  data.frame(A = 1L, a = 2L),
+  list(nested = list(Gene.ID = 1L, gene.id = 2L))
+)
+
 values <- list(
   null = NULL, logical = c(TRUE, NA, FALSE), integer = c(1L, NA_integer_),
   double = c(1.2345678901234567, Inf, -Inf, NaN, NA_real_),
@@ -12,6 +18,9 @@ values <- list(
     setNames(list(), character()), data.frame(), data.frame(x = integer())),
   nested = list(NULL, list(a = NA_integer_, b = list(NULL, 1L, "x"))),
   named = setNames(c(1L, NA_integer_), c("one", "two")),
+  atomic_case_names = c(A = 1L, a = 2L),
+  preserved_case = list(A = 1L, b = 2L,
+    unicode = setNames(list(3L, 4L), intToUtf8(c(196L, 228L), multiple = TRUE))),
   date = as.Date(c("2026-01-02", NA)),
   timestamp = as.POSIXct(c("2026-01-02 10:20:30", NA), tz = "Europe/Paris"),
   duration = as.difftime(c(1, NA, 2), units = "hours"),
@@ -111,6 +120,37 @@ for (remote in c(FALSE, TRUE)) local({
     return(invisible(NULL))
   }
   db <- if (remote) local_quack()$db else local_database()
+
+  # Case-colliding fields fail admission without issuing submission SQL.
+  query <- db@query
+  queries <- 0L
+  db@query <- function(sql) { queries <<- queries + 1L; query(sql) }
+  for (value in case_collisions) {
+    expect_error(ca_spawn(db, "invalid", value), class = "canard_value_error")
+  }
+  expect_identical(queries, 0L)
+  db@query <- query
+
+  # Invalid callback values consume a failure, without a checkpoint or result.
+  for (value in case_collisions) for (operation in c("step", "result")) {
+    id <- ca_spawn(db, "invalid", max_failures = 1L)
+    calls <- 0L
+    outcome <- ca_run(ca_claim(db), function(input, task) {
+      produce <- function() { calls <<- calls + 1L; value }
+      if (operation == "step") ca_step(task, "invalid", produce) else produce()
+    })
+    expect_identical(calls, 1L)
+    expect_identical(outcome$status, "failed")
+    expect_true(inherits(outcome$error, "canard_value_error"))
+    expect_true(inherits(outcome$error$parent, "error"))
+    expect_false(inherits(outcome$error, "canard_storage_error"))
+    record <- ca_inspect(db, id)
+    expect_identical(record$state, "failed")
+    expect_identical(record$failures, 1L)
+    expect_length(record$checkpoints, 0L)
+    expect_null(record$result)
+  }
+
   for (i in seq_along(values)) {
     value <- values[[i]]
     id <- ca_spawn(db, "value", value)

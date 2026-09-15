@@ -16,7 +16,10 @@ vectors; \code{Date}, \code{POSIXct}, \code{difftime}, factors, ordered factors 
 \code{bit64::integer64}; and recursively composed lists and ordinary data frames.
 Vector names, factor levels, timestamp time zones, data frame row names, and
 \code{I()} wrappers are retained. Named lists and data frame columns must have
-unique, nonempty names. Missing factor levels are not supported.
+nonempty names that are unique ignoring ASCII letter case, as required by
+DuckDB STRUCT fields. Names are stored unchanged; \code{A} and \code{a} cannot occur
+together in one named list or data frame. This restriction does not apply
+to atomic vector names. Missing factor levels are not supported.
 
 Logical, integer, double and character vectors map to their DuckDB scalar
 type when length one, and to typed lists otherwise. Raw vectors map to BLOB.

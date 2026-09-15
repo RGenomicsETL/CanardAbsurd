@@ -11,7 +11,10 @@
 #' `bit64::integer64`; and recursively composed lists and ordinary data frames.
 #' Vector names, factor levels, timestamp time zones, data frame row names, and
 #' `I()` wrappers are retained. Named lists and data frame columns must have
-#' unique, nonempty names. Missing factor levels are not supported.
+#' nonempty names that are unique ignoring ASCII letter case, as required by
+#' DuckDB STRUCT fields. Names are stored unchanged; `A` and `a` cannot occur
+#' together in one named list or data frame. This restriction does not apply
+#' to atomic vector names. Missing factor levels are not supported.
 #'
 #' Logical, integer, double and character vectors map to their DuckDB scalar
 #' type when length one, and to typed lists otherwise. Raw vectors map to BLOB.
@@ -140,8 +143,9 @@ NULL
 }
 .ca_type.list <- function(value) {
   out <- .ca_type_info(value, "list")
-  if (!is.null(names(value)) && (anyDuplicated(names(value)) || any(!nzchar(names(value))))) {
-    stop("List names must be unique and nonempty")
+  if (!is.null(names(value)) &&
+      (anyDuplicated(chartr("A-Z", "a-z", names(value))) || any(!nzchar(names(value))))) {
+    stop("List names must be nonempty and unique ignoring ASCII case")
   }
   if (length(value) > 0L) out$children <- unname(lapply(value, .ca_type))
   out
@@ -149,7 +153,9 @@ NULL
 .ca_type.data.frame <- function(value) {
   if (!identical(class(value), "data.frame")) stop("Coerce data frame subclasses explicitly")
   out <- .ca_type_info(value, "data.frame", c("class", "row.names", "names"))
-  if (anyDuplicated(names(value)) || any(!nzchar(names(value)))) stop("Data frame column names must be unique and nonempty")
+  if (anyDuplicated(chartr("A-Z", "a-z", names(value))) || any(!nzchar(names(value)))) {
+    stop("Data frame column names must be nonempty and unique ignoring ASCII case")
+  }
   if (length(value) > 0L) out$children <- unname(lapply(value, .ca_type))
   out$nrow <- nrow(value)
   if (.row_names_info(value, 1L) > 0L) out$rows <- attr(value, "row.names")

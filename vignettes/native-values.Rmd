@@ -32,6 +32,30 @@ compatibility v1.5.0. This is separate from CanardAbsurd's own
 schema version, which remains 1. These unreleased schema-1 files require matching
 package code; no schema migration is provided.
 
+## Field-name admission
+
+Named lists and data frame columns require nonempty names that are unique
+ignoring ASCII letter case. They are encoded through DuckDB STRUCT fields, so
+`A` and `a` cannot coexist in one container. Names are stored unchanged;
+non-ASCII letters are not case-folded. Atomic vector names are not subject to
+this restriction.
+
+These unsupported containers raise `canard_value_error` before submission SQL
+or checkpoint persistence. If a callback returns one, `ca_run()` records a
+handler failure rather than treating it as a storage failure. Callers needing
+case-colliding field names can explicitly serialize the object to a BLOB; see
+[Serialized R values](serialized-values.html).
+
+```{r field-name-admission}
+library(CanardAbsurd)
+db <- ca_open()
+tryCatch(
+  ca_spawn(db, "example", list(A = 1L, a = 2L)),
+  canard_value_error = conditionMessage
+)
+ca_close(db)
+```
+
 ## Nested NULL conversion in released R drivers
 
 DuckDB R 1.5.3 and 1.5.5 fail to convert some nested VARIANT values to R. This is
