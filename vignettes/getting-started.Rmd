@@ -12,16 +12,36 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-A workflow is an R function taking `(input, ctx)`. `ca_spawn()` stores its name
-and native input; `ca_work()` finds the corresponding function in a named list.
+A task is a durable request to run a named R handler. The handler itself stays
+in worker code; the database stores the request, its state, and values saved by
+its named steps.
 
-This guide uses an in-memory database to introduce the handler contract without
+## The concepts
+
+- **Task:** one persistent request. It has a stable ID, handler name, input,
+  queue, state, attempts, and failure budget.
+- **Handler:** an R function taking `(input, task)`. A worker supplies it from a
+  named handler list; it is not stored in the database.
+- **Attempt:** one worker's claim and execution of a handler. A replacement
+  worker starts another attempt after failure, expiry, or a durable sleep.
+- **Step:** a named point in a handler where `ca_step()` saves a value. The name
+  is a persistent part of the handler's contract.
+- **Checkpoint:** the value saved for a completed step. A later attempt receives
+  it from `ca_step()` without running that step callback again.
+- **Lease:** the worker's temporary right to update the claimed task. A stale or
+  cancelled worker cannot checkpoint or complete it.
+
+`ca_spawn()` creates a task. `ca_work()` claims tasks for the handler names it
+knows, executes attempts, and reports their outcomes. `ca_inspect()` reads the
+current task record.
+
+This guide uses an in-memory database to introduce that lifecycle without
 network access or a Quack installation. It is a one-process example: no other
-R process accesses this database. For a shared workflow
-database, Quack is mandatory: one server process owns the writable DuckDB file,
-and producers and workers use `ca_connect()` rather than opening that file.
+R process accesses this database. For a shared workflow database, Quack is
+mandatory: one server process owns the writable DuckDB file, and producers and
+workers use `ca_connect()` rather than opening that file.
 
-## Run a local, single-process task
+## Submit, work, and inspect one task
 
 ```{r open}
 library(CanardAbsurd)
@@ -45,7 +65,7 @@ queue, priority, and failure budget under that ID returns the existing task.
 Different input under that ID raises `canard_spawn_conflict`. Input equality
 includes the R mapping, names, and their order.
 
-## Replay after a failure
+## Resume after a failure
 
 The first step below completes once. The second step fails on its first call,
 so the worker retries the handler. The saved first step is replayed.
@@ -83,7 +103,7 @@ handler condition on failure. Without a callback, the worker warns on failures.
 is zero. The local counters expose which callbacks ran; they are not durable
 workflow state. Durable results live in the database.
 
-## Sleep without occupying a worker
+## Release a task until later
 
 `ca_sleep()` saves its checkpoint and releases the claim. The resumed handler
 passes that named sleep without scheduling it again.

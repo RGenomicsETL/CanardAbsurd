@@ -12,10 +12,14 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-## Guarantees and limits
+## What survives and what does not
+
+[Getting started](getting-started.html#the-concepts) defines a task, handler,
+attempt, step, checkpoint, and lease. This guide describes what those concepts
+mean when a worker, process, or connection fails.
 
 CanardAbsurd provides at-least-once task execution with durable named
-checkpoints. A task input, state, lease, counters, and completed step results
+checkpoints. A task input, state, lease, counters, and completed step values
 survive a worker failure. A replacement worker resumes the handler and replays
 those completed steps. Completed, failed, and cancelled tasks are terminal.
 
