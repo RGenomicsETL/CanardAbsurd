@@ -1,7 +1,7 @@
 R ?= R
 RSCRIPT ?= Rscript
 
-.PHONY: document install test check quack logo readme site docs
+.PHONY: document install test build check quack logo readme site docs
 
 document:
 	$(RSCRIPT) --vanilla -e 'roxygen2::roxygenise()'
@@ -14,20 +14,23 @@ quack:
 	$(RSCRIPT) --vanilla tools/install-extensions.R
 
 logo:
-	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-logo.R
+	R_LIBS="$(CURDIR)/artifacts/library$${R_LIBS:+:$$R_LIBS}" $(RSCRIPT) --vanilla tools/render-logo.R
 
 readme: install
-	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/render-readme.R
+	R_LIBS="$(CURDIR)/artifacts/library$${R_LIBS:+:$$R_LIBS}" $(RSCRIPT) --vanilla tools/render-readme.R
 
 site: install
-	R_LIBS="$(CURDIR)/artifacts/library" $(RSCRIPT) --vanilla tools/build-site.R
+	R_LIBS="$(CURDIR)/artifacts/library$${R_LIBS:+:$$R_LIBS}" $(RSCRIPT) --vanilla tools/build-site.R
 
 docs: readme site
 
 test: install
-	R_LIBS="$(CURDIR)/artifacts/library" CANARDABSURD_REQUIRE_QUACK=true $(RSCRIPT) --vanilla -e 'library(CanardAbsurd); tinytest::test_package("CanardAbsurd")'
+	R_LIBS="$(CURDIR)/artifacts/library$${R_LIBS:+:$$R_LIBS}" CANARDABSURD_REQUIRE_QUACK=true $(RSCRIPT) --vanilla -e 'library(CanardAbsurd); tinytest::test_package("CanardAbsurd")'
 
-check:
-	mkdir -p artifacts
-	cd artifacts && $(R) CMD build ..
+build:
+	mkdir -p artifacts/source/CanardAbsurd
+	rsync -a --delete --exclude=/artifacts --exclude=/.git --exclude=/.pi ./ artifacts/source/CanardAbsurd/
+	cd artifacts && $(R) CMD build source/CanardAbsurd
+
+check: build
 	cd artifacts && CANARDABSURD_REQUIRE_QUACK=true $(R) CMD check --no-manual CanardAbsurd_*.tar.gz
