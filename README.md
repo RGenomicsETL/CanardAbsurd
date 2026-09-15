@@ -31,18 +31,23 @@ CanardAbsurd can run durable requests that a controller submits.
 
 ## The mental model
 
-A task records:
+``` mermaid
+flowchart LR
+  Request["request"] --> Task["task<br/>ID · handler name · input · queue · state"]
+  Task --> Attempt["attempt<br/>one worker claim"]
+  Attempt --> Lease["lease<br/>permission to write"]
+  Attempt --> Handler["handler<br/>R function in the worker"]
+  Handler --> Step["step<br/>named ca_step() call"]
+  Step --> Checkpoint["checkpoint<br/>saved step value"]
+  Checkpoint -. replay on a later attempt .-> Handler
+  Handler --> Result["result"]
+```
 
-1.  a stable request ID and handler name;
-2.  native R input and a queue;
-3.  attempts, failures, and a leased worker claim; and
-4.  values saved by named steps and, eventually, a result.
-
-`ca_spawn()` records one request. A worker calls `ca_claim()` or
-`ca_work()` to pull eligible work. In a handler, `ca_step()` returns a
-saved value when that step completed earlier; otherwise it runs the
-callback and saves its value. The task reaches `completed`, `failed`, or
-`cancelled` when no further worker writes are permitted.
+Only the task, checkpoint, and result are durable. A handler lives in a
+worker process. Each claim starts an attempt and grants a lease;
+`ca_step()` connects a named step to its saved checkpoint. A later
+attempt replays that checkpoint instead of rerunning its callback.
+Terminal tasks are `completed`, `failed`, or `cancelled`.
 
 ## Install
 

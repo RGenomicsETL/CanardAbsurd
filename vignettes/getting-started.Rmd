@@ -18,18 +18,22 @@ its named steps.
 
 ## The concepts
 
-- **Task:** one persistent request. It has a stable ID, handler name, input,
-  queue, state, attempts, and failure budget.
-- **Handler:** an R function taking `(input, task)`. A worker supplies it from a
-  named handler list; it is not stored in the database.
-- **Attempt:** one worker's claim and execution of a handler. A replacement
-  worker starts another attempt after failure, expiry, or a durable sleep.
-- **Step:** a named point in a handler where `ca_step()` saves a value. The name
-  is a persistent part of the handler's contract.
-- **Checkpoint:** the value saved for a completed step. A later attempt receives
-  it from `ca_step()` without running that step callback again.
-- **Lease:** the worker's temporary right to update the claimed task. A stale or
-  cancelled worker cannot checkpoint or complete it.
+```mermaid
+flowchart LR
+  Request["request"] --> Task["task<br/>ID · handler name · input · queue · state"]
+  Task --> Attempt["attempt<br/>one worker claim"]
+  Attempt --> Lease["lease<br/>permission to write"]
+  Attempt --> Handler["handler<br/>R function in the worker"]
+  Handler --> Step["step<br/>named ca_step() call"]
+  Step --> Checkpoint["checkpoint<br/>saved step value"]
+  Checkpoint -. replay on a later attempt .-> Handler
+  Handler --> Result["result"]
+```
+
+Only the task, checkpoint, and result are durable. The handler lives in a
+worker process. Each claim creates an attempt and grants a lease. A named step
+links `ca_step()` to its checkpoint; a later attempt receives that checkpoint
+without running its callback again. A stale or cancelled worker cannot write.
 
 `ca_spawn()` creates a task. `ca_work()` claims tasks for the handler names it
 knows, executes attempts, and reports their outcomes. `ca_inspect()` reads the
