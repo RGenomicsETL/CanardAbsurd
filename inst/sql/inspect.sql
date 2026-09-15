@@ -1,9 +1,9 @@
-SELECT task.id, task.queue, task.name, task.input, task.priority, task.state,
+SELECT task.id, task.queue, task.name, task.input_rtype, task.priority, task.state,
     task.attempt, task.failures, task.max_failures, task.available_at,
-    task.worker, task.lease_until, task.result, task.error, task.created_at,
+    task.worker, task.lease_until, task.result_rtype, task.error, task.created_at,
     task.updated_at, checkpoint.entry.key AS checkpoint_name,
     checkpoint.entry.value.kind AS checkpoint_kind,
-    checkpoint.entry.value.json AS checkpoint_json,
+    checkpoint.entry.value.rtype AS checkpoint_rtype,
     checkpoint.ordinal AS checkpoint_ordinal
 FROM canard_absurd.tasks AS task
 LEFT JOIN LATERAL UNNEST(map_entries(task.checkpoints)) WITH ORDINALITY

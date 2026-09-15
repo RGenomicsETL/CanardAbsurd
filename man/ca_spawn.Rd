@@ -19,9 +19,8 @@ ca_spawn(
 
 \item{name}{Registered handler name.}
 
-\item{input}{JSON-compatible R value. Schema version 1 limits each input to
-1 MiB of UTF-8 JSON and each task's checkpoint map to 16 MiB. These
-server-side limits also apply to direct SQL clients.}
+\item{input}{An R value supported by \link{ca_values}. No package-imposed byte
+limit applies to input, results, checkpoints, or error text.}
 
 \item{queue}{Queue name.}
 
@@ -40,5 +39,5 @@ The task ID, a character scalar.
 Reusing an ID with the same submission is idempotent, including after
 completion. A different submission under that ID raises
 \code{canard_spawn_conflict}. Supply a stable ID to recover from a lost submission
-response. JSON encoding defines input equality, including object key order.
+response. Input equality compares the native value and its R type descriptor.
 }

@@ -1,24 +1,8 @@
 library(CanardAbsurd)
 source(system.file("tinytest", "helpers.R", package = "CanardAbsurd"), local = TRUE)
 
-if (!requireNamespace("callr", quietly = TRUE) ||
-    !requireNamespace("withr", quietly = TRUE) ||
-    !requireNamespace("parallelly", quietly = TRUE)) {
-  exit_file("Quack process tests require callr, withr, and parallelly")
-}
-quack_installed <- local({
-  con <- DBI::dbConnect(duckdb::duckdb(),
-    config = list(autoinstall_known_extensions = "false"))
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  info <- DBI::dbGetQuery(con,
-    "SELECT installed FROM duckdb_extensions() WHERE extension_name = 'quack'")
-  isTRUE(info$installed[[1L]])
-})
-if (!quack_installed) {
-  if (identical(Sys.getenv("CANARDABSURD_REQUIRE_QUACK"), "true")) {
-    stop("Quack is required for this test run")
-  }
-  exit_file("Quack is not installed for this DuckDB runtime")
+if (!quack_available()) {
+  exit_file("Quack process tests require Quack, callr, withr, and parallelly")
 }
 
 # A real remote transaction conflict offers a statement-scoped restart.
@@ -48,7 +32,7 @@ local({
   expect_identical(ca_inspect(db, id)$failures, 0L)
 })
 
-# Remote statements preserve JSON and schema semantics; authentication is enforced.
+# Remote statements preserve native values and schema semantics; authentication is enforced.
 local({
   fixture <- local_quack()
   db <- fixture$db

@@ -6,7 +6,7 @@ using(s7contract)
 
 local({
   replay <- s7contract::new_law(
-    "a saved step replays the same JSON value after a failure",
+    "a saved step replays the same native value after a failure",
     generators = list(
       value = s7contract::gen_choice(
         s7contract::gen_integer(-1000L, 1000L),

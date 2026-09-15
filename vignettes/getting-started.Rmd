@@ -13,7 +13,7 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
 ```
 
 A workflow is an R function taking `(input, ctx)`. `ca_spawn()` stores its name
-and JSON input; `ca_work()` finds the corresponding function in a named list.
+and native input; `ca_work()` finds the corresponding function in a named list.
 
 This guide uses an in-memory database to introduce the handler contract without
 network access or a Quack installation. It is a one-process example: no other
@@ -42,8 +42,8 @@ list(state = task$state, result = task$result)
 
 The stable ID also makes submission idempotent: submitting the same name, input,
 queue, priority, and failure budget under that ID returns the existing task.
-Different input under that ID raises `canard_spawn_conflict`. JSON object key
-order is part of submission equality.
+Different input under that ID raises `canard_spawn_conflict`. Input equality
+includes the R mapping, names, and their order.
 
 ## Replay after a failure
 

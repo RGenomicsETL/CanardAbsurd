@@ -17,7 +17,7 @@ again. This is separate from caller-managed SQL conflict retries.}
 \value{
 A list, invisibly, with \code{id}, claim \code{attempt}, attempt \code{status}
 (\code{"completed"}, \code{"suspended"}, or \code{"failed"}), persisted task \code{state},
-JSON-normalized \code{result}, and original handler \code{error}. A failed attempt can
+stored R \code{result}, and original handler \code{error}. A failed attempt can
 leave the task ready for retry or terminally failed. Error text is stored
 without truncation; the R condition remains available in this outcome.
 }

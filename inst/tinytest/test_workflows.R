@@ -1,7 +1,7 @@
 library(CanardAbsurd)
 source(system.file("tinytest", "helpers.R", package = "CanardAbsurd"), local = TRUE)
 
-# Steps preserve JSON nulls, keys, and values across replay.
+# Steps preserve NULLs, keys, and native R values across replay.
 local({
   db <- local_database()
   ca_spawn(db, "work", id = "replay")

@@ -13,6 +13,22 @@ wait_until <- function(predicate, timeout = 15) {
   invisible(NULL)
 }
 
+quack_available <- function() {
+  if (!requireNamespace("callr", quietly = TRUE) ||
+      !requireNamespace("withr", quietly = TRUE) ||
+      !requireNamespace("parallelly", quietly = TRUE)) return(FALSE)
+  con <- DBI::dbConnect(duckdb::duckdb(),
+    config = list(autoinstall_known_extensions = "false"))
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  info <- DBI::dbGetQuery(con,
+    "SELECT installed FROM duckdb_extensions() WHERE extension_name = 'quack'")
+  installed <- isTRUE(info$installed[[1L]])
+  if (!installed && identical(Sys.getenv("CANARDABSURD_REQUIRE_QUACK"), "true")) {
+    stop("Quack is required for this test run")
+  }
+  installed
+}
+
 local_quack <- function(.local_envir = parent.frame()) {
   directory <- tempfile("canard-quack-")
   dir.create(directory)

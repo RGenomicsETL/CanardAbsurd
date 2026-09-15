@@ -1,0 +1,155 @@
+---
+title: "Serialized R objects in BLOBs"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Serialized R objects in BLOBs}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+Native values remain inspectable in SQL. For objects outside the native mapping,
+callers can serialize explicitly: raw vectors are stored as BLOB values.
+CanardAbsurd does not choose a codec, unpack bytes, or fall back to serialization
+when native admission fails.
+
+These examples use a single-process, in-memory database. Shared deployments use
+`ca_serve()` and `ca_connect()`; the same raw-vector contract applies over Quack.
+The integration tests exercise serialized checkpoints in independent R workers.
+
+## Base R serialization
+
+This object contains a matrix and a language object, which are not admitted
+as native workflow values. The handler uses a known format and returns serialized
+bytes from its checkpoint.
+
+```{r rds-workflow}
+library(CanardAbsurd)
+db <- ca_open()
+object <- list(matrix = matrix(1:6, 2L), expression = quote(x + 1L))
+id <- ca_spawn(db, "rds-v3", serialize(object, NULL, version = 3L))
+outcome <- ca_run(ca_claim(db), function(input, task) {
+  ca_step(task, "transform", function() {
+    value <- unserialize(input)
+    value$matrix <- value$matrix * 2L
+    serialize(value, NULL, version = 3L)
+  })
+})
+unserialize(outcome$result)
+```
+
+The database can inspect the outer format and byte count, not the R object's
+contents. Whole-value materialization avoids the indexed VARIANT extraction
+issue described in [Native values and DuckDB R compatibility](native-values.html).
+
+```{r blob-inspection}
+DBI::dbGetQuery(db@con, "
+  WITH payload AS MATERIALIZED (
+    SELECT input FROM canard_absurd.tasks WHERE id = ?
+  )
+  SELECT variant_typeof(input) AS native_type,
+         octet_length(input::BLOB) AS bytes
+  FROM payload
+", params = list(id))
+```
+
+## qs2
+
+`qs2` also produces a raw vector. The package remains unaware of the encoding;
+the worker selects the matching decoder. Thread use is explicit here.
+
+```{r qs2-workflow}
+packed <- qs2::qs_serialize(object, nthreads = 1L)
+ca_spawn(db, "qs2-v1", packed)
+outcome <- ca_run(ca_claim(db), function(input, task) {
+  ca_step(task, "copy", function() {
+    value <- qs2::qs_deserialize(input, nthreads = 1L)
+    qs2::qs_serialize(value, nthreads = 1L)
+  })
+})
+qs2::qs_deserialize(outcome$result, nthreads = 1L)
+```
+
+## Sakura and reference-object reconstruction
+
+[Sakura](https://github.com/RConsortium/sakura) augments R's reference hooks.
+A class-specific serializer produces bytes, and a matching constructor rebuilds
+the reference object in the receiving process. This is useful for objects such
+as Arrow tables and torch tensors, whose external pointers cannot simply be
+copied into another R session.
+
+Here, an environment owns a buffered connection. Its hook records the source
+bytes and cursor position, rather than the connection handle. Reconstruction
+opens a fresh connection and seeks to that position.
+
+```{r sakura-configuration}
+cfg <- sakura::serial_config("buffer_reader",
+  function(reader) {
+    serialize(list(bytes = reader$bytes, position = seek(reader$con)), NULL)
+  },
+  function(bytes) {
+    saved <- unserialize(bytes)
+    reader <- new.env(parent = emptyenv())
+    reader$bytes <- saved$bytes
+    reader$con <- rawConnection(saved$bytes, "rb")
+    seek(reader$con, saved$position)
+    class(reader) <- "buffer_reader"
+    reader
+  })
+
+reader <- new.env(parent = emptyenv())
+reader$bytes <- charToRaw("alpha\nbeta\n")
+reader$con <- rawConnection(reader$bytes, "rb")
+class(reader) <- "buffer_reader"
+readLines(reader$con, n = 1L)
+packed <- sakura::serialize(reader, cfg)
+close(reader$con)
+```
+
+The handler explicitly owns reconstruction and cleanup. The saved step is a
+native string even though the input was serialized.
+
+```{r sakura-workflow}
+ca_spawn(db, "buffer-reader-v1", packed)
+outcome <- ca_run(ca_claim(db), function(input, task) {
+  ca_step(task, "line", function() {
+    restored <- sakura::unserialize(input, cfg)
+    on.exit(close(restored$con))
+    readLines(restored$con, n = 1L)
+  })
+})
+outcome$result
+ca_close(db)
+```
+
+## What the application must retain
+
+- Keep the serializer format/version and the hook-configuration identity with
+  the job or its versioned handler. Sakura's stream selects hooks by position;
+  reordering a configuration can change which decoder receives existing bytes.
+- Receiving workers need compatible R packages and decoders. Sakura uses native
+  binary serialization; test the architectures you intend to mix.
+- A successful serialization call does not prove that a reference object is
+  usable after restoration. Test its operations in a fresh process. Hooks must
+  define what is reconstructed, including resource state and sharing semantics.
+- Reconstructing a resource does not resume a running transaction, socket session
+  or call stack. External files, services and artifacts referenced by a recipe
+  must still exist.
+- Only deserialize trusted payloads. R objects and reconstruction hooks can
+  carry executable behavior. An API accepting arbitrary bytes must not turn
+  them into arbitrary worker code through an unrestricted decoder.
+- Reuse the original bytes for idempotent resubmission. Equivalent R objects are
+  not guaranteed to serialize identically across versions or configurations.
+
+Writes currently pass SQL text through Quack. BLOB literals use hexadecimal,
+which represents each byte with two characters and also requires temporary R
+allocations. Removing a byte quota does not make this an efficient bulk-data
+channel. Large datasets can remain in an artifact store or dedicated tables,
+with the job carrying references.
+
+For a targets execution backend, this supplies a transport for execution objects
+without forcing every R class into a SQL mapping. It does not itself implement
+targets scheduling, cache validity, result acknowledgement or controller recovery.

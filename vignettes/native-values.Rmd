@@ -1,0 +1,189 @@
+---
+title: "Native values and DuckDB R compatibility"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Native values and DuckDB R compatibility}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+## Storage and R mappings
+
+CanardAbsurd stores input, result, and checkpoint values as native DuckDB
+`VARIANT` values. It does not impose input or cumulative checkpoint byte quotas.
+DuckDB memory, disk, and transport limits still apply; keeping a large value in
+the task row does not make copying or transferring it free.
+
+R type descriptors accompany the values. They distinguish `NULL` from typed
+missing values, vectors from lists, and data frames from named lists. They also
+retain underlying R vector storage, names, factor levels, time zones and row names. See `?ca_values` for the
+supported classes and their mappings. Timestamps and durations have DuckDB
+microsecond precision. Custom classes require explicit conversion.
+
+The package requires DuckDB R 1.5.5 or newer. Earlier engines also have a
+reported failure when appending to indexed tables after VARIANT shredding
+([DuckDB #25024](https://github.com/duckdb/duckdb/issues/25024)). The file format
+must support persisted VARIANT values. `ca_open()` requests DuckDB storage
+compatibility v1.5.0. This is separate from CanardAbsurd's own
+schema version, which remains 1. These unreleased schema-1 files require matching
+package code; no schema migration is provided.
+
+## Nested NULL conversion in released R drivers
+
+DuckDB R 1.5.3 and 1.5.5 fail to convert some nested VARIANT values to R. This is
+reproducible with DBI alone: it does not require CanardAbsurd, Quack, JSON, or a
+file-backed database. An all-NULL VARIANT array and an object with a NULL field
+produce diagnostics such as:
+
+```
+Unknown type for column `variant`: "NULL"
+Context: LogicalTypeId::LIST
+
+Unknown type for column `variant$x`: "NULL"
+Context: LogicalTypeId::STRUCT
+```
+
+The SQL values are valid. Reading a scalar VARIANT NULL works, as do ordinary
+typed SQL arrays and structs containing missing values. It is the nested
+VARIANT-to-R conversion that fails.
+
+This reproducible example reports the behavior of the installed driver. Errors
+are caught so both failing cases and their typed controls are evaluated.
+
+```{r connection}
+library(DBI)
+con <- dbConnect(duckdb::duckdb(),
+  config = list(autoinstall_known_extensions = "false"))
+packageVersion("duckdb")
+dbGetQuery(con, "PRAGMA version")
+```
+
+```{r nested-null-reproducer}
+queries <- c(
+  scalar_null = "SELECT NULL::VARIANT AS value",
+  variant_array = "SELECT [NULL, NULL]::VARIANT AS value",
+  typed_array = "SELECT ([NULL, NULL]::VARIANT)::INTEGER[] AS value",
+  variant_object = "SELECT {'x': NULL}::VARIANT AS value",
+  typed_object = "SELECT ({'x': NULL}::VARIANT)::STRUCT(x INTEGER) AS value"
+)
+lapply(queries, function(sql) {
+  tryCatch(dbGetQuery(con, sql), error = function(error) conditionMessage(error))
+})
+```
+
+```{r close-connection}
+dbDisconnect(con, shutdown = TRUE)
+```
+
+The following configurations were also checked in isolated R processes:
+
+| R driver source/runtime | Nested VARIANT NULLs | Typed projections |
+|:--|:--|:--|
+| DuckDB R 1.5.3 | Conversion error | Pass |
+| DuckDB R 1.5.5 | Conversion error | Pass |
+| R fix `383dc751`, engine 1.5.5 | Conversion error | Pass |
+| R branch commit `013d4b59`, engine `c3c91aa84f` (2.0-dev) | Pass | Pass |
+
+The 2.0 development R build was installed under the canonical package name for
+isolated testing; its package-version label is `1.5.5.9020.1456`, not its engine
+version. That result is not evidence that a released 1.5 driver contains the fix.
+
+In the affected source, the VARIANT conversion calls
+`VariantUtils::ConvertVariantToValue()` followed by `RApiTypes::ValueToSexp()`.
+The R allocation switch lacks a `LogicalTypeId::SQLNULL` case. Compare
+[`transform.cpp` at 383dc751](https://github.com/duckdb/duckdb-r/blob/383dc751dd138685a1d305063b570188a339dd1a/src/transform.cpp)
+with [the tested 2.0 branch source](https://github.com/duckdb/duckdb-r/blob/013d4b59cab52cc23927a390de2a14952ef7ac19/src/transform.cpp),
+which handles SQLNULL during allocation and conversion. That handling was added
+in [R branch commit feeca1e1](https://github.com/duckdb/duckdb-r/commit/feeca1e1ae289cbffec4b93f8ba0d08bc9f3e422),
+which vendors DuckDB's general SQLNULL result support. The structured-error fix
+in DuckDB R #2714 addresses a different problem.
+
+## Indexed VARIANT field extraction
+
+There is a separate engine issue, [DuckDB #24064](https://github.com/duckdb/duckdb/issues/24064):
+pushing VARIANT field extraction into an index scan can cause an internal error
+and invalidate the database. The upstream report also describes incorrect NULL
+results after a file checkpoint and reopen. The error is in
+`VariantColumnData::FetchRow()`, not R conversion or Quack transport. It is
+reproducible on the tested 1.5.3 and 1.5.5 engines; the tested 2.0 development
+runtime completes the same CanardAbsurd inspection sequence.
+
+CanardAbsurd reads whole values into a `MATERIALIZED` CTE before applying typed
+field projections. This retains the indexed task-ID lookup while keeping field
+extraction outside the table's index scan. It does not disable indexes or change
+global optimizer settings. Materialization has a memory/copying cost, which is
+in addition to transferring the result to R.
+
+Direct SQL consumers on affected engines need the same query shape. A type cast
+alone does not prevent the index-scan issue:
+
+```{r indexed-value-query}
+con <- dbConnect(duckdb::duckdb())
+dbExecute(con, "CREATE TABLE events (id INTEGER PRIMARY KEY, value VARIANT)")
+dbExecute(con, "INSERT INTO events VALUES (1, {'duration_ms': 100}::VARIANT)")
+dbGetQuery(con, "
+  WITH payload AS MATERIALIZED (
+    SELECT value FROM events WHERE id = 1
+  )
+  SELECT value['duration_ms']::DOUBLE AS duration_ms FROM payload
+")
+dbDisconnect(con, shutdown = TRUE)
+```
+
+A closed upstream issue or a passing development runtime does not establish that
+a released engine contains the fix. Regression coverage must include indexed
+reads before and after checkpoint/reopen, as well as appends after shredding.
+
+## Why claims and replay perform a typed read
+
+CanardAbsurd uses the recorded R descriptor to construct a SQL projection with
+concrete result types. For example, an all-missing integer vector is fetched as
+`INTEGER[]`, not handed to the driver's generic VARIANT decoder. The descriptor
+also preserves R distinctions that cannot be inferred from a NULL value alone.
+
+The operation order and consequences are explicit:
+
+1. **Claim:** one UPDATE acquires the lease and returns the input descriptor.
+   A second, read-only statement fetches the typed input, requiring that same
+   token and an unexpired lease. No handler runs before that read succeeds.
+2. **Checkpoint replay:** the entry UPDATE checks ownership, renews the lease
+   and returns the requested checkpoint's descriptor. A fenced SELECT reads the
+   saved value. The callback is not rerun to recover from a read failure.
+3. **New checkpoint and completion:** the descriptor is already known from the
+   supplied R value. The single UPDATE stores it with the value. Checkpoints and
+   `ca_run()` return a typed projection; `ca_complete()` returns only an
+   acknowledgement without the payload. No R callback runs inside that
+   statement's transaction.
+
+The extra SELECT adds a round trip, including over Quack. It is not part of the
+preceding UPDATE's transaction. A read failure does not undo a successful claim
+or lease renewal. Cancellation or expiry between the statements produces
+`canard_lease_lost`; a transport failure is surfaced. A worker that disappears
+after claiming leaves a lease for the normal expiry/reclaim mechanism.
+
+Caller-controlled SQL retries remain statement-scoped: retrying the typed SELECT
+does not repeat the claim UPDATE or an R handler. Unknown or ambiguous transport
+failures do not acquire an automatic retry policy.
+
+Inspection first reads state and checkpoint membership, then retrieves the
+referenced values. Input, saved checkpoints and completed results are immutable
+under the package protocol, so this retains the first query's view even if a
+worker appends a checkpoint or completes between the reads. Direct edits to
+stored payloads violate that assumption.
+
+Tests include generated lease/checkpoint histories, deterministic cancellation,
+expiry and read-failure interleavings, and 60,000 indexed rows appended across
+six file checkpoints. Independent-process Quack tests provide separate
+concurrency coverage; generated sequential histories do not prove concurrent
+correctness.
+
+This compatibility path can be simplified only after the minimum supported
+R/engine combinations pass direct native decoding tests, including nested NULLs,
+empty collections, mixed lists, R class restoration and Quack round trips.
+A development build passing the small reproducer is not sufficient to remove it.
+The R descriptors remain necessary for distinctions such as data frames versus
+lists even when the driver can decode every native value.

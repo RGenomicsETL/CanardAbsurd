@@ -39,6 +39,8 @@ articles:
       - getting-started
       - articles/quack-server
       - durability
+      - native-values
+      - serialized-values
 
 reference:
   - title: Database connections
@@ -65,3 +67,4 @@ reference:
       - ca_complete
       - ca_fail
       - ca_conditions
+      - ca_values

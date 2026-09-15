@@ -29,11 +29,6 @@
   }
 }
 
-.ca_json <- function(value) {
-  as.character(jsonlite::toJSON(value, auto_unbox = TRUE,
-    null = "null", na = "null", digits = NA))
-}
-
 .ca_owned <- function(task, statement, ...) {
   rows <- .ca_query(task@db, statement,
     c(list(id = task@id, token = task@token), list(...)))

@@ -91,7 +91,7 @@ client <- ca_connect(uri, token = token)
 withr::defer(ca_close(client))
 ca_runtime(client)
 #>   duckdb_version quack_version schema_version
-#> 1         v1.5.3       1693647              1
+#> 1         v1.5.5       c154811              1
 ```
 
 ## Submit, checkpoint, and resume
@@ -379,8 +379,16 @@ and `ca_work()`.
 
 See [Durability and
 recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html)
-for failure budgets, cancellation, JSON semantics, and operational
-limits.
+for failure budgets, cancellation, and operational limits. [Native
+values and DuckDB R
+compatibility](https://rgenomicsetl.github.io/CanardAbsurd/articles/native-values.html)
+documents the R mappings, nested-NULL driver issue, indexed-VARIANT
+engine issue, and the typed reads used by claims and replay. Payloads
+have no package-imposed byte quotas; engine and transport limits still
+apply. [Serialized R objects in
+BLOBs](https://rgenomicsetl.github.io/CanardAbsurd/articles/serialized-values.html)
+shows explicit base R, qs2 and Sakura paths for values outside the
+native mapping.
 
 ## Scope and development
 

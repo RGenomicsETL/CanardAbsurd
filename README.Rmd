@@ -309,7 +309,13 @@ database, keep the Quack server in one long-lived R process and run independent
 producers and workers with `ca_connect()` and `ca_work()`.
 
 See [Durability and recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html)
-for failure budgets, cancellation, JSON semantics, and operational limits.
+for failure budgets, cancellation, and operational limits.
+[Native values and DuckDB R compatibility](https://rgenomicsetl.github.io/CanardAbsurd/articles/native-values.html)
+documents the R mappings, nested-NULL driver issue, indexed-VARIANT engine issue,
+and the typed reads used by claims and replay. Payloads have no package-imposed
+byte quotas; engine and transport limits still apply.
+[Serialized R objects in BLOBs](https://rgenomicsetl.github.io/CanardAbsurd/articles/serialized-values.html)
+shows explicit base R, qs2 and Sakura paths for values outside the native mapping.
 
 ## Scope and development
 

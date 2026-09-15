@@ -9,7 +9,7 @@ ca_complete(task, result = NULL)
 \arguments{
 \item{task}{A claim returned by \code{\link[=ca_claim]{ca_claim()}} or passed to an R handler.}
 
-\item{result}{JSON-compatible task result.}
+\item{result}{An R value supported by \link{ca_values}.}
 }
 \value{
 \code{NULL}, invisibly. Stale claims raise \code{canard_lease_lost}.

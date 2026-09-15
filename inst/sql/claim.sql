@@ -19,4 +19,4 @@ WHERE id = (
     ORDER BY priority DESC, available_at, created_at, id
     LIMIT 1
 )
-RETURNING 1 AS changed, id, name, input, token::VARCHAR AS token, attempt;
+RETURNING 1 AS changed, id, name, input_rtype, token::VARCHAR AS token, attempt;

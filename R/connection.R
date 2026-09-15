@@ -6,6 +6,7 @@
 #' other processes connect to a Quack server rather than opening that file.
 #'
 #' @param path DuckDB database path, or `":memory:"`.
+#' @importFrom duckdb duckdb
 #' @return An S7 `CanardConnection` handle.
 #' @export
 #' @examples
@@ -16,8 +17,9 @@
 #' ca_close(db)
 ca_open <- function(path = ":memory:") {
   request <- .ca_input(CanardDatabase, path = path)
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = request@path,
-    config = list(autoinstall_known_extensions = "false"))
+  con <- DBI::dbConnect(duckdb(), dbdir = request@path, bigint = "integer64",
+    config = list(autoinstall_known_extensions = "false",
+      storage_compatibility_version = "v1.5.0"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   db <- CanardConnection(con = con, query = function(sql) DBI::dbGetQuery(con, sql))
   schema <- readLines(system.file("sql", "schema.sql", package = "CanardAbsurd",
@@ -84,16 +86,17 @@ ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL
 
 #' Connect to a workflow server
 #'
-#' Uses DuckDB's Quack client. Each workflow command is executed wholly on the
-#' server in one SQL statement. The client owns only an in-memory DuckDB
-#' connection, not a second writable handle to the server's database file.
+#' Uses DuckDB's Quack client. Each state transition executes in one server-side
+#' SQL statement; typed value retrieval can require a separate read. The client
+#' owns only an in-memory DuckDB connection, not a second writable handle to the
+#' server's database file.
 #'
 #' @inheritParams ca_serve
 #' @return An S7 `CanardConnection` handle.
 #' @export
 ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
   endpoint <- .ca_input(CanardEndpoint, uri = uri, token = token, extension = extension)
-  con <- DBI::dbConnect(duckdb::duckdb(),
+  con <- DBI::dbConnect(duckdb(), bigint = "integer64",
     config = list(autoinstall_known_extensions = "false"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   db <- CanardConnection(con = con, uri = uri,

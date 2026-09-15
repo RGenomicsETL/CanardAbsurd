@@ -6,8 +6,8 @@
   rows <- .ca_owned(task, "enter", name = name, seconds = task@lease_seconds)
   saved_kind <- rows$checkpoint_kind[[1L]]
   saved <- if (is.na(saved_kind)) NULL else list(kind = saved_kind)
-  if (!is.null(saved) && !is.na(rows$checkpoint_json[[1L]])) {
-    saved$json <- rows$checkpoint_json[[1L]]
+  if (!is.null(saved) && !is.null(rows$checkpoint_rtype[[1L]])) {
+    saved$type <- .ca_read_type(rows$checkpoint_rtype[[1L]])
   }
   if (!is.null(saved) && !identical(saved$kind, kind)) {
     stop(errorCondition(paste("Checkpoint kind differs for step:", name),
@@ -26,27 +26,33 @@
 #'
 #' Step names must be unique in an attempt and stable across deployments. Include
 #' an explicit index for repeated steps in a loop. Checkpoint results must remain
-#' compatible with handlers that can resume existing tasks. Schema version 1
-#' limits each task's checkpoint map to 16 MiB. There is no additional per-step
-#' size limit.
+#' compatible with handlers that can resume existing tasks. The package imposes
+#' no per-step or cumulative checkpoint byte limit.
 #'
 #' @inheritParams ca_heartbeat
 #' @param name Stable checkpoint name.
-#' @param fn Zero-argument function returning a JSON-compatible value.
-#' @return The JSON-normalized value, both on initial execution and replay.
-#'   JSON arrays become R lists, JSON objects become named lists, and JSON null
-#'   becomes `NULL`. A cached `NULL` is distinct from an absent checkpoint.
+#' @param fn Zero-argument function returning a value supported by [ca_values].
+#' @return The stored R value, both on initial execution and replay. Timestamps
+#'   and durations have DuckDB microsecond precision. A cached `NULL` is distinct
+#'   from an absent checkpoint.
 #' @export
 ca_step <- function(task, name, fn) {
   request <- .ca_input(CanardStep, task = task, name = name, fn = fn)
   saved <- .ca_enter_step(request@task, request@name, "step")
+  expr <- paste0("map_extract_value(checkpoints, ",
+    DBI::dbQuoteString(task@db@con, request@name), ").value")
   if (!is.null(saved)) {
-    return(jsonlite::fromJSON(saved$json, simplifyVector = FALSE))
+    rows <- .ca_owned(task, "value",
+      projection = DBI::SQL(.ca_projection(expr, saved$type, task@db@con)))
+    return(.ca_restore(rows$value, saved$type))
   }
-  encoded <- .ca_json(request@fn())
-  .ca_owned(request@task, "checkpoint", name = request@name, json = encoded,
-    seconds = request@task@lease_seconds)
-  jsonlite::fromJSON(encoded, simplifyVector = FALSE)
+  value <- request@fn()
+  payload <- .ca_payload(value, task@db@con)
+  rows <- .ca_owned(task, "checkpoint", name = request@name,
+    value = payload$value, rtype = payload$rtype,
+    projection = DBI::SQL(.ca_projection(expr, payload$type, task@db@con)),
+    seconds = task@lease_seconds)
+  .ca_restore(rows$value, payload$type)
 }
 
 #' Suspend a workflow until a database-clock deadline
@@ -85,7 +91,7 @@ ca_sleep <- function(task, name, seconds) {
 #'   again. This is separate from caller-managed SQL conflict retries.
 #' @return A list, invisibly, with `id`, claim `attempt`, attempt `status`
 #'   (`"completed"`, `"suspended"`, or `"failed"`), persisted task `state`,
-#'   JSON-normalized `result`, and original handler `error`. A failed attempt can
+#'   stored R `result`, and original handler `error`. A failed attempt can
 #'   leave the task ready for retry or terminally failed. Error text is stored
 #'   without truncation; the R condition remains available in this outcome.
 #' @export
@@ -100,10 +106,10 @@ ca_run <- function(task, handler, failure_delay = 0) {
   force(failure_delay)
   function(task) {
     tryCatch({
-      encoded <- .ca_json(handler(task@input, task))
-      .ca_owned(task, "complete", result = encoded)
+      value <- handler(task@input, task)
+      result <- .ca_finish(task, value)
       list(id = task@id, attempt = task@attempt, status = "completed", state = "completed",
-        result = jsonlite::fromJSON(encoded, simplifyVector = FALSE), error = NULL)
+        result = result, error = NULL)
     }, canard_suspended = function(e) {
       list(id = task@id, attempt = task@attempt, status = "suspended", state = "ready",
         result = NULL, error = NULL)

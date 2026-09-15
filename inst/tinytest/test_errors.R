@@ -92,7 +92,7 @@ local({
   expect_identical(outcome$status, "completed")
   expect_identical(writes, 2L)
   expect_identical(effects, 1L)
-  expect_identical(ca_inspect(db, id)$result, 42L)
+  expect_identical(ca_inspect(db, id)$result, 42)
 })
 
 # Caller retry-handler errors propagate without consuming the task failure budget.

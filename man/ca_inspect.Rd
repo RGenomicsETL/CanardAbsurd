@@ -12,9 +12,13 @@ ca_inspect(db, id)
 \item{id}{Stable task ID (1 to 256 characters), or \code{NULL} to generate a UUID.}
 }
 \value{
-A named list containing task state, counters, timestamps, decoded
-JSON input and result, and checkpoint records; \code{NULL} for an unknown ID.
+A named list containing task state, counters, timestamps, R input
+and result, and checkpoint records; \code{NULL} for an unknown ID. Step records
+contain \code{kind} and \code{value}; sleep records contain \code{kind}.
 }
 \description{
-Inspect a task
+State and checkpoint membership come from one metadata query. A second query
+retrieves the referenced immutable values; later checkpoints or completion
+become visible on the next inspection. This relies on mutations using the
+package protocol rather than modifying stored payloads directly.
 }

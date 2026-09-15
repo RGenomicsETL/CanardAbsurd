@@ -1,7 +1,7 @@
 UPDATE canard_absurd.tasks
 SET state = 'ready',
     checkpoints = map_concat(checkpoints,
-        map([?name], [struct_pack(kind := 'sleep', json := NULL::VARCHAR)])),
+        map([?name], [struct_pack(kind := 'sleep', value := NULL::VARIANT, rtype := NULL::VARIANT)])),
     available_at = to_timestamp(epoch_ms(current_timestamp) / 1000.0 + ?seconds),
     worker = NULL, token = NULL, lease_until = NULL,
     updated_at = current_timestamp

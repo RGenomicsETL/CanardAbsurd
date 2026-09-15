@@ -11,12 +11,12 @@ ca_step(task, name, fn)
 
 \item{name}{Stable checkpoint name.}
 
-\item{fn}{Zero-argument function returning a JSON-compatible value.}
+\item{fn}{Zero-argument function returning a value supported by \link{ca_values}.}
 }
 \value{
-The JSON-normalized value, both on initial execution and replay.
-JSON arrays become R lists, JSON objects become named lists, and JSON null
-becomes \code{NULL}. A cached \code{NULL} is distinct from an absent checkpoint.
+The stored R value, both on initial execution and replay. Timestamps
+and durations have DuckDB microsecond precision. A cached \code{NULL} is distinct
+from an absent checkpoint.
 }
 \description{
 The callback runs outside a transaction. Its result is checkpointed only after
@@ -26,7 +26,6 @@ writes, not external services. Use stable business keys for external requests.
 \details{
 Step names must be unique in an attempt and stable across deployments. Include
 an explicit index for repeated steps in a loop. Checkpoint results must remain
-compatible with handlers that can resume existing tasks. Schema version 1
-limits each task's checkpoint map to 16 MiB. There is no additional per-step
-size limit.
+compatible with handlers that can resume existing tasks. The package imposes
+no per-step or cumulative checkpoint byte limit.
 }

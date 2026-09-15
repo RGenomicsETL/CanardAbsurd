@@ -18,7 +18,8 @@ ca_connect(uri = "quack:127.0.0.1:9494", token, extension = NULL)
 An S7 \code{CanardConnection} handle.
 }
 \description{
-Uses DuckDB's Quack client. Each workflow command is executed wholly on the
-server in one SQL statement. The client owns only an in-memory DuckDB
-connection, not a second writable handle to the server's database file.
+Uses DuckDB's Quack client. Each state transition executes in one server-side
+SQL statement; typed value retrieval can require a separate read. The client
+owns only an in-memory DuckDB connection, not a second writable handle to the
+server's database file.
 }

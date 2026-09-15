@@ -96,10 +96,12 @@ current unexpired token. An expired lease cannot be revived by heartbeating.
 Cancellation also invalidates subsequent worker writes; it does not interrupt
 an external operation already in progress.
 
-## Checkpoints are JSON values
+## Checkpoints preserve native values
 
-JSON arrays normalize to R lists on both execution and replay. JSON objects
-become named lists. A saved `NULL` is distinct from a missing checkpoint.
+Vectors, lists, data frames, dates, timestamps and other supported R values
+retain their declared mappings on execution and replay. A saved `NULL` is
+distinct from a missing checkpoint. See [Native values and DuckDB R compatibility](native-values.html)
+for the supported classes, precision limits and driver compatibility details.
 
 ```{r null-checkpoint}
 id <- ca_spawn(db, "example")
@@ -119,10 +121,9 @@ new handler code.
 ## Query workflow state with SQL
 
 Task state, queue, attempts, failures, and timestamps are typed columns. Inputs
-and results use JSON text rather than opaque R serialization so their contents
-remain visible to SQL. Checkpoint names and kinds are available through
-`canard_absurd.task_checkpoints`; its `value_json` column holds the encoded step
-value.
+and results are native VARIANT values with separate R type descriptors.
+Checkpoint names, kinds and native values are available through
+`canard_absurd.task_checkpoints`.
 
 ```{r sql-inspection}
 DBI::dbGetQuery(db@con, "
@@ -132,15 +133,16 @@ DBI::dbGetQuery(db@con, "
   ORDER BY state
 ")
 DBI::dbGetQuery(db@con, "
-  SELECT name, kind, value_json
+  SELECT name, kind, variant_typeof(value) AS value_type
   FROM canard_absurd.task_checkpoints
   WHERE task_id = ?
 ", params = list(id))
 ```
 
-These queries need no DuckDB extensions. Analysts who explicitly install and
-load the JSON extension can cast `input`, `result`, or `value_json` to `JSON` for
-nested field extraction. CanardAbsurd does not load or install that extension.
+These queries need no DuckDB extensions. Nested fields can be extracted and cast
+with native SQL. On affected engines, materialize whole values before indexed
+field extraction; the compatibility guide includes the query form and an
+executable explanation of the separate nested-NULL conversion issue.
 
 ## Inspect an attempt's failure
 
@@ -203,9 +205,11 @@ a lease while a callback blocks.
 - Checkpoints share the task row so lease changes and checkpoint writes contend
   on the same durable record. This keeps lease ownership and checkpoint storage
   in one update; it is not a throughput guarantee.
-- Schema version 1 limits input to 1 MiB of UTF-8 JSON and each task's checkpoint
-  map to 16 MiB. Results and error text have no additional package-imposed size
-  cap.
+- Inputs, results, checkpoints and error text have no package-imposed byte quota.
+  Large values still consume engine memory, disk and transport capacity.
+- Claims and checkpoint replay use a fenced typed read after their lease UPDATE.
+  A failure of that read does not undo the UPDATE or cause a handler to run.
+  See the compatibility guide for the additional round trip and recovery rules.
 - Schema version 1 bounds task IDs and handler names to 256 characters, queue
   names to 128 characters, and failure budgets to 1 through 1,000,000. Changing
   those persisted constraints requires a schema change, not a client option.
