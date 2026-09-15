@@ -31,4 +31,4 @@ CanardAbsurd ships a DuckDB workflow state machine and a thin R client. Quack ow
 
 ## Validation
 
-Run `make document`, `make test`, and `make check`, followed by the Tree-sitter anti-slop audit. Documentation changes require `make docs`; install Quack explicitly with `make quack` when needed. The integration tests must exercise installed package artifacts and independent R processes. Keep build output under `artifacts/`. Preserve the separately developed examples in `~/ducknng`.
+Run affected tests while developing. Run `make document`, `make test`, `make check`, and the Tree-sitter anti-slop audit for behavioral, release, dependency, schema, or broad documentation changes. Isolated prose or configuration changes require their relevant render, lint, or check. Install Quack explicitly with `make quack` when needed; integration tests must exercise installed package artifacts and independent R processes. Keep build output under `artifacts/`. Preserve the separately developed examples in `~/ducknng`.
