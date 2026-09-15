@@ -12,28 +12,26 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-A task is a durable request to run a named R handler. The handler itself stays
-in worker code; the database stores the request, its state, and values saved by
-its named steps.
+A workflow is worker code: a named R handler and its named `ca_step()` calls.
+One workflow can have many durable task requests. Each task can have many saved
+step values.
 
 ## The concepts
 
 ```mermaid
-flowchart LR
-  Request["request"] --> Task["task<br/>ID · handler name · input · queue · state"]
-  Task --> Attempt["attempt<br/>one worker claim"]
-  Attempt --> Lease["lease<br/>permission to write"]
-  Attempt --> Handler["handler<br/>R function in the worker"]
-  Handler --> Step["step<br/>named ca_step() call"]
-  Step --> Checkpoint["checkpoint<br/>saved step value"]
-  Checkpoint -. replay on a later attempt .-> Handler
-  Handler --> Result["result"]
+flowchart TB
+  Request["detected input or API request"] -->|"ca_spawn()"| Task
+  Workflow["workflow<br/>named R handler and its steps"] -->|"one workflow → many tasks"| Task
+  Task["task<br/>one durable workflow request"] -->|"one task → many named steps"| Step
+  Worker["R worker"] -->|"claims an attempt and lease"| Task
+  Step["step<br/>one named stage"] -->|"saves or replays"| State
+  Task -->|"state · input · result · lease"| State
+  State[("DuckDB workflow database")]
 ```
 
-Only the task, checkpoint, and result are durable. The handler lives in a
-worker process. Each claim creates an attempt and grants a lease. A named step
-links `ca_step()` to its checkpoint; a later attempt receives that checkpoint
-without running its callback again. A stale or cancelled worker cannot write.
+The workflow code stays in a worker process; DuckDB stores task state, leases,
+results, and saved step values. A later attempt replays a saved step instead of
+rerunning its callback. A stale or cancelled worker cannot write.
 
 `ca_spawn()` creates a task. `ca_work()` claims tasks for the handler names it
 knows, executes attempts, and reports their outcomes. `ca_inspect()` reads the

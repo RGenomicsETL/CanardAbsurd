@@ -32,22 +32,22 @@ CanardAbsurd can run durable requests that a controller submits.
 ## The mental model
 
 ``` mermaid
-flowchart LR
-  Request["request"] --> Task["task<br/>ID · handler name · input · queue · state"]
-  Task --> Attempt["attempt<br/>one worker claim"]
-  Attempt --> Lease["lease<br/>permission to write"]
-  Attempt --> Handler["handler<br/>R function in the worker"]
-  Handler --> Step["step<br/>named ca_step() call"]
-  Step --> Checkpoint["checkpoint<br/>saved step value"]
-  Checkpoint -. replay on a later attempt .-> Handler
-  Handler --> Result["result"]
+flowchart TB
+  Request["detected input or API request"] -->|"ca_spawn()"| Task
+  Workflow["workflow<br/>named R handler and its steps"] -->|"one workflow → many tasks"| Task
+  Task["task<br/>one durable workflow request"] -->|"one task → many named steps"| Step
+  Worker["R worker"] -->|"claims an attempt and lease"| Task
+  Step["step<br/>one named stage"] -->|"saves or replays"| State
+  Task -->|"state · input · result · lease"| State
+  State[("DuckDB workflow database")]
 ```
 
-Only the task, checkpoint, and result are durable. A handler lives in a
-worker process. Each claim starts an attempt and grants a lease;
-`ca_step()` connects a named step to its saved checkpoint. A later
-attempt replays that checkpoint instead of rerunning its callback.
-Terminal tasks are `completed`, `failed`, or `cancelled`.
+A workflow is worker code: a named R handler and its `ca_step()` calls.
+Each request creates one durable task for that workflow. A task records
+values for its named steps in DuckDB; a later attempt replays a saved
+step instead of rerunning its callback. DuckDB holds the task state,
+lease, result, and saved step values. Terminal tasks are `completed`,
+`failed`, or `cancelled`.
 
 ## Install
 
@@ -108,44 +108,56 @@ same handler and `ca_step(task, "subtotal", ...)` returns the saved
 value without running that callback again. A step callback that finishes
 but fails before its value is saved can run again.
 
-## Choose the database owner
+## Choose where the database lives
 
-| Situation                                   | Use                                                 |
-|---------------------------------------------|-----------------------------------------------------|
-| One script or one R process                 | `ca_open()`                                         |
-| Producers and workers in separate processes | One `ca_serve()` process and `ca_connect()` clients |
+``` mermaid
+flowchart LR
+  subgraph Local["one R process"]
+    LocalR["your R process"] -->|"ca_open()"| LocalDB[("DuckDB")]
+  end
+  subgraph Shared["separate producer and worker processes"]
+    Producer["producer"] -->|"ca_connect() over Quack"| Server["server<br/>ca_serve()"]
+    Worker["worker"] -->|"ca_connect() over Quack"| Server
+    Server -->|"only file owner"| SharedDB[("DuckDB file")]
+  end
+```
 
-For shared work, the server is the only process that opens the DuckDB
-file. Producers and workers use Quack connections to that server.
-Workers run R handlers in their own processes; the server only executes
-SQL.
+Use `ca_open()` when one R process does everything. Otherwise, the
+server alone opens the DuckDB file; producers and workers connect
+through Quack. Handlers run in workers, not in the server.
 
-## Make external work repeatable
+## Where repeat work can happen
 
-A saved step is durable only after its database write succeeds. If a
-worker writes a file, calls an API, or launches a tool and then exits
-before that write, the next attempt can repeat the action. Use a
-business-level idempotency key where the external system enforces it.
+``` mermaid
+flowchart LR
+  Step["step callback"] --> Effect["file · API · tool"]
+  Effect --> Save["save checkpoint"]
+  Effect -. "worker exits before save" .-> Retry["later attempt"]
+  Retry --> Effect
+```
 
-A lease rejects writes from an old worker after another worker has
-reclaimed the task. It does not terminate a process that is already
-running. Long callbacks must call `ca_heartbeat()` before their lease
-expires; `ca_step()` and `ca_sleep()` renew the lease when they save
-state.
+The checkpoint does not make an external action transactional. Use an
+idempotency key where that external system enforces one. A lease rejects
+stale writes; it does not stop a process already running. Heartbeat long
+callbacks.
 
 ## Use it with `targets`
 
-`targets` and CanardAbsurd solve different problems:
+``` mermaid
+flowchart LR
+  Target["targets<br/>plan graph · cache · invalidate"]
+  Task["CanardAbsurd task<br/>state · lease · saved steps"]
+  Worker["independent worker"]
+  Target -->|"submit an explicit request"| Task
+  Task -->|"claim"| Worker
+  Worker -->|"checkpoint or complete"| Task
+  Task -->|"inspect terminal task"| Target
+```
 
-| `targets` owns                                                                  | CanardAbsurd owns                                                                                 |
-|---------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
-| target graph, branching, cache validity, invalidation, and controller decisions | request state, worker leases, checkpoint replay, retryable task attempts, and cancellation fences |
-
-A controller can submit a stable application request ID, let independent
-CanardAbsurd workers run it, then inspect the terminal task. The request
-ID must describe the requested execution, not merely an input value: a
-controller may intentionally request another execution with unchanged
-inputs. There is no `targets` backend in this package.
+`targets` decides whether graph work should run; CanardAbsurd executes
+the request that a controller submits. Use an ID for the requested
+execution, not only its input value: unchanged inputs can still need
+another run. There is no `targets` backend in this package.
 
 ## Values and next steps
 
