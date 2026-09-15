@@ -22,6 +22,13 @@ CanardAbsurd ships a DuckDB workflow state machine and a thin R client. Quack ow
 - Loading the package never installs extensions or starts services.
 - Quack installation is explicit. Tests skip remote cases only when Quack is unavailable; `CANARDABSURD_REQUIRE_QUACK=true` makes absence a failure.
 
+## Engineering judgment
+
+- Start with a concrete failure mode or user need, then choose the simplest adequate safeguard. Do not add checksums, receipts, manifests, validation layers, or audit trails merely to signal rigor.
+- Use hashes when byte identity answers a relevant question, not as a default completion ritual. Reproducibility requires usable inputs and an understood procedure; a digest alone supplies neither.
+- Judge correctness, usefulness, scope, and readability directly. Passing tests, traceability, and accumulated verification artifacts are not substitutes for that judgment.
+- Keep verification proportional to the change. Meet the required gates without repeatedly checking unaffected work, and stop when the requested task is complete. Do not promote task-specific precautions into universal policy.
+
 ## Validation
 
 Run `make document`, `make test`, and `make check`, followed by the Tree-sitter anti-slop audit. Documentation changes require `make docs`; install Quack explicitly with `make quack` when needed. The integration tests must exercise installed package artifacts and independent R processes. Keep build output under `artifacts/`. Preserve the separately developed examples in `~/ducknng`.
