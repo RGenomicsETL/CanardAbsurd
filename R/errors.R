@@ -8,6 +8,7 @@
   native <- error
   while (!is.null(native) && is.null(native$error_type)) native <- native$parent
   if (!is.null(native)) {
+    failure$error_type <- native$error_type
     if (!identical(native$error_type, "TRANSACTION")) return(failure)
     failure$message_based <- FALSE
   } else {

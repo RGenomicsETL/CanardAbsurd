@@ -40,4 +40,9 @@ Reusing an ID with the same submission is idempotent, including after
 completion. A different submission under that ID raises
 \code{canard_spawn_conflict}. Supply a stable ID to recover from a lost submission
 response. Input equality compares the native value and its R type descriptor.
+A structured constraint failure is followed by an existing-submission lookup,
+not another write. A match acknowledges the existing task; a different
+submission raises \code{canard_spawn_conflict}. Without an existing task the
+original storage error is retained. If lookup fails, its storage condition
+also carries the original failure as \code{submission_error}.
 }

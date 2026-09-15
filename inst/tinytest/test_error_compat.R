@@ -13,6 +13,7 @@ local({
   expect_false(failure$message_based)
   expect_identical(failure$parent, wrapper)
   expect_identical(failure$attempts, 2L)
+  expect_identical(failure$error_type, "TRANSACTION")
 
   for (type in c("IO", "BINDER", "CONSTRAINT", "UNRECOGNIZED")) {
     cause <- errorCondition("TransactionContext Error: Conflict on update!",
@@ -54,4 +55,61 @@ local({
     expect_false(inherits(failure, "canard_conflict"))
     expect_identical(conditionMessage(failure), message)
   }
+})
+
+# Constraint failures acknowledge an existing matching submission without another write.
+local({
+  db <- ca_open()
+  withr::defer(ca_close(db))
+  ca_spawn(db, "work", 1L, id = "submitted")
+  query <- db@query
+  writes <- retries <- 0L
+  cause <- errorCondition("constraint diagnostic", class = "duckdb_error", error_type = "CONSTRAINT")
+  db@query <- function(sql) {
+    if (startsWith(sql, "INSERT INTO canard_absurd.tasks")) {
+      writes <<- writes + 1L
+      stop(cause)
+    }
+    query(sql)
+  }
+  withCallingHandlers({
+    expect_identical(ca_spawn(db, "work", 1L, id = "submitted"), "submitted")
+    different <- tryCatch(ca_spawn(db, "work", 2L, id = "submitted"), error = identity)
+    expect_true(inherits(different, "canard_spawn_conflict"))
+    expect_identical(different$parent$parent, cause)
+    missing <- tryCatch(ca_spawn(db, "work", 1L, id = "missing"), error = identity)
+    expect_true(inherits(missing, "canard_storage_error"))
+    expect_identical(missing$parent, cause)
+  }, canard_retryable = function(event) retries <<- retries + 1L)
+  expect_identical(writes, 3L)
+  expect_identical(retries, 0L)
+
+  # Errors from caller retry handlers are not submission acknowledgements.
+  conflict <- errorCondition("transaction conflict", error_type = "TRANSACTION")
+  policy_error <- errorCondition("caller stopped", class = "canard_storage_error",
+    error_type = "CONSTRAINT", operation = "spawn")
+  db@query <- function(sql) {
+    if (startsWith(sql, "INSERT INTO canard_absurd.tasks")) stop(conflict)
+    query(sql)
+  }
+  caught <- tryCatch(withCallingHandlers(ca_spawn(db, "work", 1L, id = "submitted"),
+    canard_retryable = function(event) stop(policy_error)), error = identity)
+  expect_identical(caught, policy_error)
+  db@query <- function(sql) {
+    if (startsWith(sql, "INSERT INTO canard_absurd.tasks")) stop(cause)
+    stop(conflict)
+  }
+  caught <- tryCatch(withCallingHandlers(ca_spawn(db, "work", 1L, id = "submitted"),
+    canard_retryable = function(event) stop(policy_error)), error = identity)
+  expect_identical(caught, policy_error)
+
+  read_error <- simpleError("connection reset during submission lookup")
+  db@query <- function(sql) {
+    if (startsWith(sql, "INSERT INTO canard_absurd.tasks")) stop(cause)
+    stop(read_error)
+  }
+  failure <- tryCatch(ca_spawn(db, "work", 1L, id = "submitted"), error = identity)
+  expect_identical(failure$operation, "submission")
+  expect_identical(failure$parent, read_error)
+  expect_identical(failure$submission_error$parent, cause)
 })

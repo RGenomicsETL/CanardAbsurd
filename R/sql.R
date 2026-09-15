@@ -1,6 +1,6 @@
 .ca_sql <- new.env(parent = emptyenv())
 
-.ca_query <- function(db, statement, params = list()) {
+.ca_query <- function(db, statement, params = list(), on_failure = stop) {
   force(params)
   started <- proc.time()[["elapsed"]]
   attempt <- 0L
@@ -19,12 +19,12 @@
 
     failure <- .ca_storage_error(result, statement, attempt,
       proc.time()[["elapsed"]] - started, id = params$id)
-    if (!inherits(failure, "canard_conflict")) stop(failure)
+    if (!inherits(failure, "canard_conflict")) return(on_failure(failure))
     notification <- failure
     class(notification) <- c("canard_retryable", "condition")
     withRestarts({
       signalCondition(notification)
-      stop(failure)
+      return(on_failure(failure))
     }, canard_retry = function() NULL)
   }
 }

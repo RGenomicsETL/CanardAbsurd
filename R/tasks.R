@@ -4,6 +4,11 @@
 #' completion. A different submission under that ID raises
 #' `canard_spawn_conflict`. Supply a stable ID to recover from a lost submission
 #' response. Input equality compares the native value and its R type descriptor.
+#' A structured constraint failure is followed by an existing-submission lookup,
+#' not another write. A match acknowledges the existing task; a different
+#' submission raises `canard_spawn_conflict`. Without an existing task the
+#' original storage error is retained. If lookup fails, its storage condition
+#' also carries the original failure as `submission_error`.
 #'
 #' @inheritParams ca_close
 #' @param name Registered handler name.
@@ -26,11 +31,21 @@ ca_spawn <- function(db, name, input = NULL, queue = "default", id = NULL,
   params <- list(id = id, queue = request@queue, name = request@name,
     input = payload$value, rtype = payload$rtype, priority = request@priority,
     max_failures = request@max_failures)
-  rows <- .ca_query(db, "spawn", params)
+  failure <- NULL
+  rows <- .ca_query(db, "spawn", params, on_failure = function(error) {
+    if (!identical(error$error_type, "CONSTRAINT")) stop(error)
+    failure <<- error
+    existing <- .ca_query(db, "submission", params, on_failure = function(error) {
+      error$submission_error <- failure
+      stop(error)
+    })
+    if (nrow(existing) == 0L) stop(failure)
+    existing
+  })
   if (nrow(rows) == 0L) rows <- .ca_query(db, "submission", params)
   if (nrow(rows) != 1L || rows$changed[[1L]] != 1L) {
     stop(errorCondition(paste("Task ID already has a different submission:", id),
-      class = c("canard_spawn_conflict", "canard_error"), id = id))
+      class = c("canard_spawn_conflict", "canard_error"), id = id, parent = failure))
   }
   rows$id[[1L]]
 }
