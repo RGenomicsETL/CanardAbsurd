@@ -24,16 +24,30 @@
   }
 })
 
+.ca_positive_integer <- S7::new_property(S7::class_numeric, validator = function(value) {
+  if (length(value) != 1L || !is.finite(value) || value < 1 || value != trunc(value)) {
+    "must be one positive integer-valued number"
+  }
+})
+
+.ca_extension <- S7::new_property(S7::new_union(NULL, S7::class_character),
+  validator = function(value) {
+    if (!is.null(value) && (length(value) != 1L || is.na(value) || !nzchar(value))) {
+      "must be NULL or one nonempty file path"
+    }
+  })
+
 CanardDatabase <- S7::new_class("CanardDatabase", properties = list(path = .ca_name))
 
 CanardEndpoint <- S7::new_class("CanardEndpoint", properties = list(
-  uri = .ca_name, token = .ca_name,
-  extension = S7::new_property(S7::new_union(NULL, S7::class_character),
-    validator = function(value) {
-      if (!is.null(value) && (length(value) != 1L || is.na(value) || !nzchar(value))) {
-        "must be NULL or one nonempty file path"
-      }
-    })
+  uri = .ca_name, token = .ca_name, extension = .ca_extension
+))
+
+CanardCoordinator <- S7::new_class("CanardCoordinator", properties = list(
+  db = CanardConnection,
+  extension = .ca_extension,
+  poll_milliseconds = .ca_positive_integer,
+  reap_limit = .ca_positive_integer
 ))
 
 CanardSubmission <- S7::new_class("CanardSubmission", properties = list(
@@ -50,11 +64,7 @@ CanardSubmission <- S7::new_class("CanardSubmission", properties = list(
 CanardClaim <- S7::new_class("CanardClaim", properties = list(
   db = CanardConnection, queue = .ca_name, worker = .ca_name,
   lease_seconds = .ca_positive_seconds,
-  reap_limit = S7::new_property(S7::class_numeric, validator = function(value) {
-    if (length(value) != 1L || !is.finite(value) || value < 1 || value != trunc(value)) {
-      "must be one positive integer-valued number"
-    }
-  }),
+  reap_limit = .ca_positive_integer,
   task_names = S7::new_property(S7::new_union(NULL, S7::class_character),
     validator = function(value) {
       if (anyNA(value) || any(!nzchar(value))) "must contain nonempty handler names"

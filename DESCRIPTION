@@ -22,5 +22,6 @@ Config/Needs/website: pkgdown, litedown
 Config/Needs/graphics: rsvg
 Roxygen: list(markdown = TRUE)
 SystemRequirements: The Quack extension matching the installed DuckDB runtime,
-    for remote clients and database hosting
+    for remote clients and database hosting; the optional Canard coordinator
+    extension for native lease maintenance
 Config/roxygen2/version: 8.0.0

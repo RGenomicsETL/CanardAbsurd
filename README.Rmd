@@ -114,6 +114,22 @@ Use `ca_open()` when one R process does everything. Otherwise, the server alone
 opens the DuckDB file; producers and workers connect through Quack. Handlers run
 in workers, not in the server.
 
+## Optional native lease maintenance
+
+The optional `canard_coordinator` extension runs bounded expired-lease
+maintenance in the database-owner process, independently of worker claims. It
+targets stable DuckDB C API v1.2 and uses a dedicated connection with pending
+query execution. `ca_coordinator_start()` starts the loop,
+`ca_coordinator_status()` reports its state and counters, and
+`ca_coordinator_stop()` joins the native thread and releases its connection.
+`ca_close()` performs that shutdown automatically.
+
+The v1 coordinator is one-shot for each database handle: it cannot restart after
+its dedicated connection closes. It does not supervise external jobs, reserve
+CPU or memory, or publish artifacts. See the
+[native extension instructions](tools/canard-coordinator/README.md) for the
+build, signing, and lifecycle contract.
+
 ## Where repeat work can happen
 
 ```mermaid

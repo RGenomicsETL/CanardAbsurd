@@ -4,7 +4,8 @@ CanardConnection <- S7::new_class(
     con = S7::class_any,
     query = S7::class_function,
     uri = S7::new_property(S7::class_character, default = ""),
-    server = S7::new_property(S7::class_logical, default = FALSE)
+    server = S7::new_property(S7::class_logical, default = FALSE),
+    services = S7::class_environment
   )
 )
 

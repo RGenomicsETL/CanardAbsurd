@@ -1,3 +1,10 @@
+.ca_services <- function() {
+  services <- new.env(parent = emptyenv())
+  services$coordinator_loaded <- FALSE
+  services$coordinator <- FALSE
+  services
+}
+
 #' Open a local workflow database
 #'
 #' Installs schema version 1 in a transaction, or checks the existing version.
@@ -21,7 +28,8 @@ ca_open <- function(path = ":memory:") {
     config = list(autoinstall_known_extensions = "false",
       storage_compatibility_version = "v1.5.0"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  db <- CanardConnection(con = con, query = function(sql) DBI::dbGetQuery(con, sql))
+  db <- CanardConnection(con = con, query = function(sql) DBI::dbGetQuery(con, sql),
+    services = .ca_services())
   schema <- readLines(system.file("sql", "schema.sql", package = "CanardAbsurd",
     mustWork = TRUE), warn = FALSE)
   DBI::dbWithTransaction(con, {
@@ -43,18 +51,22 @@ ca_open <- function(path = ":memory:") {
   db
 }
 
-.ca_load_quack <- function(con, extension) {
+.ca_load_extension <- function(con, extension, name, label) {
   tryCatch({
-    target <- "quack"
+    target <- name
     if (!is.null(extension)) {
       target <- DBI::dbQuoteString(con, normalizePath(extension, mustWork = TRUE))
     }
     DBI::dbExecute(con, paste("LOAD", target))
   }, error = function(e) {
-    stop(errorCondition(paste("Unable to load Quack:", conditionMessage(e)),
+    stop(errorCondition(paste0("Unable to load ", label, ": ", conditionMessage(e)),
       class = c("canard_extension_error", "canard_error"), parent = e))
   })
   invisible(NULL)
+}
+
+.ca_load_quack <- function(con, extension) {
+  .ca_load_extension(con, extension, "quack", "Quack")
 }
 
 #' Serve a workflow database over Quack
@@ -99,7 +111,7 @@ ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
   con <- DBI::dbConnect(duckdb(), bigint = "integer64",
     config = list(autoinstall_known_extensions = "false"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  db <- CanardConnection(con = con, uri = uri,
+  db <- CanardConnection(con = con, uri = uri, services = .ca_services(),
     query = function(sql) DBI::dbGetQuery(con, "SELECT * FROM quack_query(?, ?)",
       params = list(uri, as.character(sql))))
   .ca_load_quack(con, endpoint@extension)
@@ -127,6 +139,7 @@ ca_close <- function(db) {
     sql <- DBI::sqlInterpolate(db@con, "CALL quack_stop(?uri)", uri = db@uri)
     DBI::dbGetQuery(db@con, sql)
   }
+  if (db@services$coordinator) ca_coordinator_stop(db)
   invisible(NULL)
 }
 

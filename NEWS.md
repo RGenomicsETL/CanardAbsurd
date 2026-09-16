@@ -7,3 +7,4 @@
 * Reject list and data frame names that collide under DuckDB's ASCII case-insensitive comparison during value admission.
 * Document the driver and engine compatibility requirements for VARIANT storage.
 * Fence stale task writes and support retry budgets and cancellation.
+* Optionally run bounded expired-lease maintenance with a DuckDB C API v1.2 coordinator and an explicit start, status, and stop lifecycle.
