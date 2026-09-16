@@ -12,17 +12,21 @@
 
 extern duckdb_ext_api_v1 duckdb_ext_api;
 
+/* Same transition as inst/sql/reap.sql, applied across all queues. */
 static const char *CANARD_REAP_SQL =
-    "UPDATE canard_absurd.tasks "
-    "SET state = 'failed', completed_at = current_timestamp, updated_at = current_timestamp, "
-    "lease_until = NULL, lease_token = NULL "
-    "WHERE id IN ("
-    "  SELECT id FROM canard_absurd.tasks "
-    "  WHERE state = 'running' AND lease_until <= current_timestamp "
-    "    AND failures + 1 >= max_failures "
-    "    AND (SELECT version FROM canard_absurd.schema_version) = 1 "
-    "  ORDER BY lease_until, id LIMIT ?"
-    ") RETURNING id";
+    "UPDATE canard_absurd.tasks\n"
+    "SET state = 'failed', failures = failures + 1,\n"
+    "    error = 'worker lease expired',\n"
+    "    worker = NULL, token = NULL, lease_until = NULL,\n"
+    "    updated_at = current_timestamp\n"
+    "WHERE id IN (\n"
+    "    SELECT id FROM canard_absurd.tasks\n"
+    "    WHERE state = 'running'\n"
+    "        AND lease_until <= current_timestamp AND failures + 1 >= max_failures\n"
+    "        AND (SELECT version FROM canard_absurd.schema_version) = 1\n"
+    "    ORDER BY lease_until, id LIMIT ?\n"
+    ")\n"
+    "RETURNING 1 AS changed, id;";
 
 typedef enum {
 	CANARD_COORDINATOR_READY = 0,
@@ -170,16 +174,19 @@ static void canard_coordinator_main(void *argument) {
 	while (!canard_stop_requested(runtime)) {
 		char error[CANARD_ERROR_CAPACITY] = {0};
 		uint64_t reaped = 0;
-		if (!statement && canard_prepare_reaper(runtime, &statement, error) == DuckDBError) {
-			if (!canard_stop_requested(runtime)) {
-				canard_record_poll(runtime, 0, error);
-			}
-		} else if (statement && canard_execute_reaper(runtime, statement, &reaped, error) == DuckDBError) {
+		duckdb_state poll_result = DuckDBSuccess;
+		if (!statement) {
+			poll_result = canard_prepare_reaper(runtime, &statement, error);
+		}
+		if (poll_result == DuckDBSuccess) {
+			poll_result = canard_execute_reaper(runtime, statement, &reaped, error);
+		}
+		if (poll_result == DuckDBError) {
 			duckdb_destroy_prepare(&statement);
 			if (!canard_stop_requested(runtime)) {
 				canard_record_poll(runtime, 0, error);
 			}
-		} else if (statement) {
+		} else {
 			canard_record_poll(runtime, reaped, NULL);
 		}
 		if (canard_wait(runtime, runtime->poll_milliseconds)) {
@@ -204,6 +211,7 @@ static bool canard_runtime_start(canard_runtime *runtime, uint64_t poll_millisec
 		canard_mutex_unlock(&runtime->mutex);
 		return false;
 	}
+
 	runtime->poll_milliseconds = poll_milliseconds;
 	runtime->reap_limit = reap_limit;
 	runtime->stop_requested = false;
@@ -310,8 +318,10 @@ static void canard_start_function(duckdb_function_info info, duckdb_data_chunk i
 	if (!canard_valid_control_call(info, input, 2)) {
 		return;
 	}
-	uint64_t poll_milliseconds = ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(input, 0)))[0];
-	uint64_t reap_limit = ((uint64_t *)duckdb_vector_get_data(duckdb_data_chunk_get_vector(input, 1)))[0];
+	duckdb_vector poll_vector = duckdb_data_chunk_get_vector(input, 0);
+	duckdb_vector limit_vector = duckdb_data_chunk_get_vector(input, 1);
+	uint64_t poll_milliseconds = ((uint64_t *)duckdb_vector_get_data(poll_vector))[0];
+	uint64_t reap_limit = ((uint64_t *)duckdb_vector_get_data(limit_vector))[0];
 	if (poll_milliseconds < 1 || poll_milliseconds > CANARD_MAX_POLL_MILLISECONDS) {
 		duckdb_scalar_function_set_error(info, "poll_milliseconds must be between 1 and 86400000");
 		return;
@@ -339,7 +349,6 @@ static void canard_stop_function(duckdb_function_info info, duckdb_data_chunk in
 }
 
 static void canard_status_function(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
-	(void)input;
 	canard_runtime *runtime = (canard_runtime *)duckdb_scalar_function_get_extra_info(info);
 	canard_status status;
 	canard_status_read(runtime, &status);
@@ -372,6 +381,8 @@ static bool canard_register_start(duckdb_connection connection, canard_runtime *
 	duckdb_scalar_function_add_parameter(function, unsigned_type);
 	duckdb_scalar_function_set_return_type(function, boolean_type);
 	duckdb_scalar_function_set_volatile(function);
+	/* Let the callback reject NULL instead of silently returning SQL NULL. */
+	duckdb_scalar_function_set_special_handling(function);
 	canard_runtime_retain(runtime);
 	duckdb_scalar_function_set_extra_info(function, runtime, canard_runtime_release);
 	duckdb_scalar_function_set_function(function, canard_start_function);
@@ -453,10 +464,11 @@ bool canard_coordinator_load(duckdb_connection connection, duckdb_extension_info
 
 	bool registered = canard_register_start(connection, runtime) && canard_register_stop(connection, runtime) &&
 	                  canard_register_status(connection, runtime);
-	canard_runtime_release(runtime);
 	if (!registered) {
+		/* Earlier registrations can still retain the runtime after LOAD fails. */
+		(void)canard_runtime_stop(runtime);
 		access->set_error(info, "Unable to register the Canard coordinator SQL functions");
-		return false;
 	}
-	return true;
+	canard_runtime_release(runtime);
+	return registered;
 }

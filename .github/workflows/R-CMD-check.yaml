@@ -92,8 +92,12 @@ jobs:
       - name: Install runtime test dependencies
         shell: Rscript {0}
         run: |
-          install.packages(c("DBI", "duckdb"))
+          install.packages(c("bit64", "DBI", "duckdb", "S7"))
           stopifnot(packageVersion("duckdb") >= "1.5.5")
+
+      - name: Install CanardAbsurd from this checkout
+        shell: bash
+        run: R CMD INSTALL .
 
       - name: Fetch DuckDB 1.5.5
         shell: bash
