@@ -51,6 +51,12 @@ reference:
       - ca_connect
       - ca_runtime
       - ca_close
+  - title: Native maintenance
+    desc: Run bounded expired-lease maintenance in the database-owner process.
+    contents:
+      - ca_coordinator_start
+      - ca_coordinator_status
+      - ca_coordinator_stop
   - title: Task administration
     contents:
       - ca_spawn
