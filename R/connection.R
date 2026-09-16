@@ -9,8 +9,9 @@
 #'
 #' Installs schema version 1 in a transaction, or checks the existing version.
 #' The handle owns its DBI connection. Close it explicitly with [ca_close()].
-#' No extensions are downloaded. A file-backed database has one owning process;
-#' other processes connect to a Quack server rather than opening that file.
+#' No extensions are downloaded. Local handles use a session-private DuckDB
+#' home. A file-backed database has one owning process; other processes connect
+#' to a Quack server rather than opening that file.
 #'
 #' @param path DuckDB database path, or `":memory:"`.
 #' @importFrom duckdb duckdb
@@ -23,9 +24,13 @@
 #' ca_inspect(db, id)$result
 #' ca_close(db)
 ca_open <- function(path = ":memory:") {
+  .ca_open_database(path, shared_home = FALSE)
+}
+
+.ca_open_database <- function(path, shared_home) {
   request <- .ca_input(CanardDatabase, path = path)
-  con <- DBI::dbConnect(duckdb(), dbdir = request@path, bigint = "integer64",
-    config = list(autoinstall_known_extensions = "false",
+  con <- DBI::dbConnect(duckdb(shared_home = shared_home), dbdir = request@path,
+    bigint = "integer64", config = list(autoinstall_known_extensions = "false",
       storage_compatibility_version = "v1.5.0"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   db <- CanardConnection(con = con, query = function(sql) DBI::dbGetQuery(con, sql),
@@ -73,7 +78,10 @@ ca_open <- function(path = ":memory:") {
 #'
 #' The calling process owns the database and must remain alive. Quack handles
 #' SQL requests on its native server threads; R task handlers run in clients.
-#' Protect non-local endpoints with authenticated ingress and TLS.
+#' Protect non-local endpoints with authenticated ingress and TLS. With
+#' `extension = NULL`, the server explicitly uses DuckDB's shared home to find
+#' the preinstalled Quack extension; an extension path uses session-private
+#' storage.
 #'
 #' @inheritParams ca_open
 #' @param uri Quack endpoint, including a port when not using the default.
@@ -84,7 +92,7 @@ ca_open <- function(path = ":memory:") {
 #' @export
 ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL) {
   endpoint <- .ca_input(CanardEndpoint, uri = uri, token = token, extension = extension)
-  db <- ca_open(path)
+  db <- .ca_open_database(path, shared_home = is.null(endpoint@extension))
   on.exit(ca_close(db))
   .ca_load_quack(db@con, endpoint@extension)
   sql <- DBI::sqlInterpolate(db@con,
@@ -101,15 +109,17 @@ ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL
 #' Uses DuckDB's Quack client. Each state transition executes in one server-side
 #' SQL statement; typed value retrieval can require a separate read. The client
 #' owns only an in-memory DuckDB connection, not a second writable handle to the
-#' server's database file.
+#' server's database file. With `extension = NULL`, the client explicitly uses
+#' DuckDB's shared home to find the preinstalled Quack extension; an extension
+#' path uses session-private storage.
 #'
 #' @inheritParams ca_serve
 #' @return An S7 `CanardConnection` handle.
 #' @export
 ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
   endpoint <- .ca_input(CanardEndpoint, uri = uri, token = token, extension = extension)
-  con <- DBI::dbConnect(duckdb(), bigint = "integer64",
-    config = list(autoinstall_known_extensions = "false"))
+  con <- DBI::dbConnect(duckdb(shared_home = is.null(endpoint@extension)),
+    bigint = "integer64", config = list(autoinstall_known_extensions = "false"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   db <- CanardConnection(con = con, uri = uri, services = .ca_services(),
     query = function(sql) DBI::dbGetQuery(con, "SELECT * FROM quack_query(?, ?)",

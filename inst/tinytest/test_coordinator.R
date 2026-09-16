@@ -3,10 +3,10 @@ if (!nzchar(extension)) {
   exit_file("Native coordinator tests require CANARDABSURD_COORDINATOR_EXTENSION")
 }
 
-driver <- duckdb::duckdb(tempfile(fileext = ".duckdb"), config = list(
-  allow_unsigned_extensions = "true",
-  autoinstall_known_extensions = "false",
-  storage_compatibility_version = "v1.5.0"))
+driver <- duckdb::duckdb(tempfile(fileext = ".duckdb"), shared_home = FALSE,
+  config = list(allow_unsigned_extensions = "true",
+    autoinstall_known_extensions = "false",
+    storage_compatibility_version = "v1.5.0"))
 con <- DBI::dbConnect(driver, bigint = "integer64")
 schema <- readLines(system.file("sql", "schema.sql", package = "CanardAbsurd",
   mustWork = TRUE), warn = FALSE)

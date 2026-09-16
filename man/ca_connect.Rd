@@ -21,5 +21,7 @@ An S7 \code{CanardConnection} handle.
 Uses DuckDB's Quack client. Each state transition executes in one server-side
 SQL statement; typed value retrieval can require a separate read. The client
 owns only an in-memory DuckDB connection, not a second writable handle to the
-server's database file.
+server's database file. With \code{extension = NULL}, the client explicitly uses
+DuckDB's shared home to find the preinstalled Quack extension; an extension
+path uses session-private storage.
 }

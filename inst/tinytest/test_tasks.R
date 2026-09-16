@@ -117,13 +117,13 @@ local({
 
   path <- tempfile(fileext = ".duckdb")
   withr::defer(unlink(c(path, paste0(path, ".wal"))))
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = path)
+  con <- DBI::dbConnect(duckdb::duckdb(shared_home = FALSE), dbdir = path)
   DBI::dbExecute(con, "CREATE SCHEMA canard_absurd")
   DBI::dbExecute(con, "CREATE TABLE canard_absurd.schema_version(version INTEGER)")
   DBI::dbExecute(con, "INSERT INTO canard_absurd.schema_version VALUES (2)")
   DBI::dbDisconnect(con, shutdown = TRUE)
   expect_error(ca_open(path), "Unsupported CanardAbsurd schema version")
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = path)
+  con <- DBI::dbConnect(duckdb::duckdb(shared_home = FALSE), dbdir = path)
   expect_identical(DBI::dbGetQuery(con,
     "SELECT version FROM canard_absurd.schema_version")$version, 2L)
   DBI::dbDisconnect(con, shutdown = TRUE)
