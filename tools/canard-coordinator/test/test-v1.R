@@ -2,8 +2,8 @@ args <- commandArgs(trailingOnly = TRUE)
 if (length(args) != 1L) stop("Usage: Rscript test-v1.R /path/to/canard_coordinator.duckdb_extension")
 extension <- normalizePath(args[[1L]], mustWork = TRUE)
 
-driver <- duckdb::duckdb(tempfile(fileext = ".duckdb"), config = list(
-  allow_unsigned_extensions = "true", autoinstall_known_extensions = "false"))
+driver <- duckdb::duckdb(tempfile(fileext = ".duckdb"), shared_home = FALSE,
+  config = list(allow_unsigned_extensions = "true", autoinstall_known_extensions = "false"))
 con <- DBI::dbConnect(driver)
 on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 DBI::dbExecute(con, paste("LOAD", DBI::dbQuoteString(con, extension)))

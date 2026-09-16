@@ -30,7 +30,7 @@ run this once with network access:
 ```r
 dir.create(path.expand("~/.duckdb"), recursive = TRUE, showWarnings = FALSE)
 local({
-  con <- DBI::dbConnect(duckdb::duckdb())
+  con <- DBI::dbConnect(duckdb::duckdb(shared_home = TRUE))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSTALL quack")
 })
