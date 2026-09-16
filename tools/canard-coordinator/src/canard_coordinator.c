@@ -12,17 +12,20 @@
 
 extern duckdb_ext_api_v1 duckdb_ext_api;
 
+/* Same failure transition as inst/sql/reap.sql, applied across all queues. */
 static const char *CANARD_REAP_SQL =
     "UPDATE canard_absurd.tasks "
-    "SET state = 'failed', completed_at = current_timestamp, updated_at = current_timestamp, "
-    "lease_until = NULL, lease_token = NULL "
+    "SET state = 'failed', failures = failures + 1, "
+    "error = 'worker lease expired', "
+    "worker = NULL, token = NULL, lease_until = NULL, "
+    "updated_at = current_timestamp "
     "WHERE id IN ("
     "  SELECT id FROM canard_absurd.tasks "
     "  WHERE state = 'running' AND lease_until <= current_timestamp "
     "    AND failures + 1 >= max_failures "
     "    AND (SELECT version FROM canard_absurd.schema_version) = 1 "
     "  ORDER BY lease_until, id LIMIT ?"
-    ") RETURNING id";
+    ") RETURNING 1 AS changed, id";
 
 typedef enum {
 	CANARD_COORDINATOR_READY = 0,
@@ -170,16 +173,19 @@ static void canard_coordinator_main(void *argument) {
 	while (!canard_stop_requested(runtime)) {
 		char error[CANARD_ERROR_CAPACITY] = {0};
 		uint64_t reaped = 0;
-		if (!statement && canard_prepare_reaper(runtime, &statement, error) == DuckDBError) {
-			if (!canard_stop_requested(runtime)) {
-				canard_record_poll(runtime, 0, error);
-			}
-		} else if (statement && canard_execute_reaper(runtime, statement, &reaped, error) == DuckDBError) {
+		duckdb_state poll_state = DuckDBSuccess;
+		if (!statement) {
+			poll_state = canard_prepare_reaper(runtime, &statement, error);
+		}
+		if (poll_state == DuckDBSuccess) {
+			poll_state = canard_execute_reaper(runtime, statement, &reaped, error);
+		}
+		if (poll_state == DuckDBError) {
 			duckdb_destroy_prepare(&statement);
 			if (!canard_stop_requested(runtime)) {
 				canard_record_poll(runtime, 0, error);
 			}
-		} else if (statement) {
+		} else {
 			canard_record_poll(runtime, reaped, NULL);
 		}
 		if (canard_wait(runtime, runtime->poll_milliseconds)) {
@@ -339,7 +345,6 @@ static void canard_stop_function(duckdb_function_info info, duckdb_data_chunk in
 }
 
 static void canard_status_function(duckdb_function_info info, duckdb_data_chunk input, duckdb_vector output) {
-	(void)input;
 	canard_runtime *runtime = (canard_runtime *)duckdb_scalar_function_get_extra_info(info);
 	canard_status status;
 	canard_status_read(runtime, &status);
@@ -372,6 +377,7 @@ static bool canard_register_start(duckdb_connection connection, canard_runtime *
 	duckdb_scalar_function_add_parameter(function, unsigned_type);
 	duckdb_scalar_function_set_return_type(function, boolean_type);
 	duckdb_scalar_function_set_volatile(function);
+	duckdb_scalar_function_set_special_handling(function);
 	canard_runtime_retain(runtime);
 	duckdb_scalar_function_set_extra_info(function, runtime, canard_runtime_release);
 	duckdb_scalar_function_set_function(function, canard_start_function);
