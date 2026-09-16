@@ -6,6 +6,7 @@ output: github_document
 
 # CanardAbsurd <img src="man/figures/logo.png" align="right" width="140" alt="CanardAbsurd hex sticker: Ce n’est pas un canard." />
 
+[![R-CMD-check](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/R-CMD-check.yaml)
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
 [![R-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
 
