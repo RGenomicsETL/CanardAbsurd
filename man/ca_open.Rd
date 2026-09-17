@@ -15,8 +15,9 @@ An S7 \code{CanardConnection} handle.
 \description{
 Installs schema version 1 in a transaction, or checks the existing version.
 The handle owns its DBI connection. Close it explicitly with \code{\link[=ca_close]{ca_close()}}.
-No extensions are downloaded. A file-backed database has one owning process;
-other processes connect to a Quack server rather than opening that file.
+No extensions are downloaded. Local handles use a session-private DuckDB
+home. A file-backed database has one owning process; other processes connect
+to a Quack server rather than opening that file.
 }
 \examples{
 db <- ca_open()

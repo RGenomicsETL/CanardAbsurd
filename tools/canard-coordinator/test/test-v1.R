@@ -45,7 +45,7 @@ create_fixture <- function(path) {
       ('expired-b', 2, TIMESTAMPTZ '2000-01-02 00:00:00+00'),
       ('expired-c', 1, TIMESTAMPTZ '2000-01-03 00:00:00+00'),
       ('retryable', 0, TIMESTAMPTZ '2000-01-01 00:00:00+00'),
-      ('live', 0, current_timestamp + INTERVAL '1 hour')
+      ('live', 0, TIMESTAMPTZ '2100-01-01 00:00:00+00')
     ) AS fixture(id, failures, deadline)
     WHERE task.id = fixture.id
   ")
@@ -60,7 +60,7 @@ create_fixture <- function(path) {
 test_reaper <- function(extension) {
   path <- tempfile(fileext = ".duckdb")
   create_fixture(path)
-  driver <- duckdb::duckdb(path, config = list(
+  driver <- duckdb::duckdb(path, shared_home = FALSE, config = list(
     allow_unsigned_extensions = "true",
     autoinstall_known_extensions = "false"
   ))

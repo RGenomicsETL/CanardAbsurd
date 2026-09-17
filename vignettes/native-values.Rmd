@@ -80,7 +80,7 @@ are caught so both failing cases and their typed controls are evaluated.
 
 ```{r connection}
 library(DBI)
-con <- dbConnect(duckdb::duckdb(),
+con <- dbConnect(duckdb::duckdb(shared_home = FALSE),
   config = list(autoinstall_known_extensions = "false"))
 packageVersion("duckdb")
 dbGetQuery(con, "PRAGMA version")
@@ -146,7 +146,7 @@ Direct SQL consumers on affected engines need the same query shape. A type cast
 alone does not prevent the index-scan issue:
 
 ```{r indexed-value-query}
-con <- dbConnect(duckdb::duckdb())
+con <- dbConnect(duckdb::duckdb(shared_home = FALSE))
 dbExecute(con, "CREATE TABLE events (id INTEGER PRIMARY KEY, value VARIANT)")
 dbExecute(con, "INSERT INTO events VALUES (1, {'duration_ms': 100}::VARIANT)")
 dbGetQuery(con, "

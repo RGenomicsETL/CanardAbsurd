@@ -213,7 +213,10 @@ NULL
 }
 
 .ca_read_type <- function(value) {
-  out <- lapply(value, function(column) if (is.list(column)) column[[1L]] else column)
+  out <- lapply(value, function(column) {
+    field <- if (is.list(column)) column[[1L]] else column
+    if (is.atomic(field)) c(field) else field
+  })
   children <- out$children
   if (is.data.frame(children)) {
     out$children <- lapply(seq_len(nrow(children)), function(i) .ca_read_type(children[i, , drop = FALSE]))

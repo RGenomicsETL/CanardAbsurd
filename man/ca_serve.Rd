@@ -22,5 +22,8 @@ A local S7 \code{CanardConnection} handle owning the server.
 \description{
 The calling process owns the database and must remain alive. Quack handles
 SQL requests on its native server threads; R task handlers run in clients.
-Protect non-local endpoints with authenticated ingress and TLS.
+Protect non-local endpoints with authenticated ingress and TLS. With
+\code{extension = NULL}, the server explicitly uses DuckDB's shared home to find
+the preinstalled Quack extension; an extension path uses session-private
+storage.
 }

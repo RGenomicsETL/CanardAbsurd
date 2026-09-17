@@ -17,7 +17,7 @@ quack_available <- function() {
   if (!requireNamespace("callr", quietly = TRUE) ||
       !requireNamespace("withr", quietly = TRUE) ||
       !requireNamespace("parallelly", quietly = TRUE)) return(FALSE)
-  con <- DBI::dbConnect(duckdb::duckdb(),
+  con <- DBI::dbConnect(duckdb::duckdb(shared_home = TRUE),
     config = list(autoinstall_known_extensions = "false"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   info <- DBI::dbGetQuery(con,

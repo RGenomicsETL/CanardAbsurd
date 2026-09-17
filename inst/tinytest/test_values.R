@@ -60,6 +60,7 @@ local({
   expect_identical(ca_step(task, "saved", function() stop("must replay")), values)
   ca_complete(task, values)
   expect_identical(ca_inspect(db, id)$result, values)
+  ca_close(db)
 })
 
 # Appending after VARIANT shredding and reopening retains indexed payloads.
@@ -93,6 +94,7 @@ local({
   expect_identical(ca_step(task, "saved", function() stop("must replay")), task@input)
   ca_complete(task, task@input)
   expect_identical(ca_inspect(db, task@id)$result, task@input)
+  ca_close(db)
 })
 
 # Unsupported classes and attributes fail before a submission writes to the database.

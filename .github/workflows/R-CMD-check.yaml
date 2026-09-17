@@ -23,7 +23,8 @@ jobs:
         config:
           - {os: macos-latest, r: release}
           - {os: windows-latest, r: release}
-          - {os: ubuntu-latest, r: devel, http-user-agent: release}
+          # DuckDB does not publish an R-devel binary; dependency compatibility
+          # belongs in a dedicated job rather than a 30-minute source build here.
           - {os: ubuntu-latest, r: release, quack: true}
           - {os: ubuntu-latest, r: '4.3'}
     env:
@@ -38,7 +39,6 @@ jobs:
       - uses: r-lib/actions/setup-r@465b7d8e732ca3921382b1674c59bada9cbf3399 # v2
         with:
           r-version: ${{ matrix.config.r }}
-          http-user-agent: ${{ matrix.config.http-user-agent }}
           use-public-rspm: true
           extra-repositories: https://sounkou-bioinfo.r-universe.dev
 
