@@ -1,7 +1,7 @@
 R ?= R
 RSCRIPT ?= Rscript
 
-.PHONY: document install test build check quack logo readme site docs
+.PHONY: document install test build check quack logo readme site docs benchmark
 
 document:
 	$(RSCRIPT) --vanilla -e 'roxygen2::roxygenise()'
@@ -34,3 +34,9 @@ build:
 
 check: build
 	cd artifacts && CANARDABSURD_REQUIRE_QUACK=true $(R) CMD check --no-manual CanardAbsurd_*.tar.gz
+
+BENCHMARK_TRANSPORT ?= quack
+
+benchmark: install
+	mkdir -p artifacts/benchmarks
+	R_LIBS="$(CURDIR)/artifacts/library$${R_LIBS:+:$$R_LIBS}" $(RSCRIPT) --vanilla tools/benchmark.R $(BENCHMARK_TRANSPORT) artifacts/benchmarks/$(BENCHMARK_TRANSPORT).csv
