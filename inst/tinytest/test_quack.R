@@ -46,6 +46,8 @@ local({
   })$status, "completed")
   expect_identical(ca_inspect(db, id)$result, list(x = NULL, quote = "'\"\\"))
   expect_identical(ca_inspect(db, id)$attempt, 1L)
+  expect_identical(ca_result(db, id), list(x = NULL, quote = "'\"\\"))
+  expect_identical(ca_tasks(db, state = "completed")$id, id)
   ca_spawn(db, "sleep", id = "sleep")
   handler <- function(input, ctx) {
     ca_sleep(ctx, "pause", 0.05)
@@ -56,7 +58,7 @@ local({
   expect_equal(ca_inspect(db, "sleep")$result, 42)
 })
 
-# Independent R workers race on server-owned claims and idempotent submission.
+# Plain independent R workers survive claim contention; submission stays idempotent.
 local({
   fixture <- local_quack()
   for (i in seq_len(24L)) {
@@ -64,31 +66,32 @@ local({
   }
   workers <- list()
   withr::defer(for (p in workers) if (p$is_alive()) p$kill())
-  for (i in seq_len(3L)) {
+  for (i in seq_len(4L)) {
     workers[[i]] <- callr::r_bg(function(uri, directory, i) {
       library(CanardAbsurd)
       db <- ca_connect(uri, "test-token")
       on.exit(ca_close(db))
       file.create(file.path(directory, paste0("worker-", i)))
       while (!file.exists(file.path(directory, "go"))) Sys.sleep(0.01)
-      withCallingHandlers({
-        ca_spawn(db, "work", list(n = 0), id = "dedupe", queue = "dedupe")
-        ca_work(db, list(work = function(input, ctx) {
-          ca_step(ctx, "compute", function() {
-            cat(ctx@id, "\n", file = file.path(directory, paste0("effects-", i)), append = TRUE)
-            input$n * 2
-          })
-        }), idle_timeout = 0.5, poll_seconds = 0.02, lease_seconds = 10)
-      }, canard_retryable = function(conflict) {
-        if (conflict$attempts <= 20L) {
-          Sys.sleep(runif(1L, 0.001, 0.01))
-          invokeRestart("canard_retry")
-        }
-      })
+      # Submission is caller code, so the caller chooses its conflict policy.
+      withCallingHandlers(ca_spawn(db, "work", list(n = 0), id = "dedupe", queue = "dedupe"),
+        canard_retryable = function(conflict) {
+          if (conflict$attempts <= 20L) {
+            Sys.sleep(0.005)
+            invokeRestart("canard_retry")
+          }
+        })
+      # Plain workers rely on the default statement-level conflict policy.
+      ca_work(db, list(work = function(input, ctx) {
+        ca_step(ctx, "compute", function() {
+          cat(ctx@id, "\n", file = file.path(directory, paste0("effects-", i)), append = TRUE)
+          input$n * 2
+        })
+      }), idle_timeout = 0.5, poll_seconds = 0.02, lease_seconds = 10)
     }, args = list(fixture$uri, fixture$directory, i), libpath = .libPaths(), supervise = TRUE)
   }
   wait_until(function() all(file.exists(file.path(fixture$directory,
-    paste0("worker-", seq_len(3L))))))
+    paste0("worker-", seq_len(4L))))))
   file.create(file.path(fixture$directory, "go"))
   for (p in workers) p$wait(30000)
   expect_false(any(vapply(workers, function(p) p$is_alive(), logical(1L))))

@@ -18,10 +18,17 @@
 #'
 #' The coordinator is one-shot for the lifetime of this database handle. Call
 #' [ca_close()] or [ca_coordinator_stop()] to join its thread and release its
-#' connection before the owning DuckDB database is closed.
+#' connection before the owning DuckDB database is closed. The extension holds
+#' that connection from the moment it loads, so closing the DBI connection
+#' directly leaves the database open, locked, and maintained until the process
+#' exits.
+#'
+#' No signed build is distributed. A locally built extension loads only into a
+#' database opened with `allow_unsigned_extensions = TRUE`, a development-only
+#' setting; see [ca_open()].
 #'
 #' @param db A local handle returned by [ca_open()] or [ca_serve()].
-#' @param extension Optional path to a compatible signed coordinator extension.
+#' @param extension Optional path to a compatible coordinator extension.
 #'   `NULL` loads an explicitly preinstalled `canard_coordinator` extension.
 #' @param poll_milliseconds Delay between maintenance polls, in milliseconds.
 #' @param reap_limit Maximum expired tasks failed by one poll.

@@ -128,3 +128,66 @@ local({
     "SELECT version FROM canard_absurd.schema_version")$version, 2L)
   DBI::dbDisconnect(con, shutdown = TRUE)
 })
+
+# Task listings return metadata only; results are retrieved separately.
+local({
+  db <- local_database()
+  ca_spawn(db, "work", list(big = runif(10)), id = "done", queue = "q1")
+  ca_spawn(db, "work", id = "waiting", queue = "q1")
+  ca_spawn(db, "work", id = "elsewhere", queue = "q2")
+  ca_spawn(db, "work", id = "null-result", queue = "q3")
+  task <- ca_claim(db, queue = "q1")
+  ca_step(task, "step", function() 1)
+  ca_complete(task, list(total = 3L))
+  ca_complete(ca_claim(db, queue = "q3"), NULL)
+
+  listing <- ca_tasks(db)
+  expect_identical(names(listing), c("id", "queue", "name", "state", "priority",
+    "attempt", "failures", "max_failures", "available_at", "worker", "lease_until",
+    "error", "created_at", "updated_at"))
+  expect_identical(sort(listing$id), sort(c("done", "waiting", "elsewhere", "null-result")))
+  expect_identical(ca_tasks(db, queue = "q1", state = "completed")$id, "done")
+  expect_identical(sort(ca_tasks(db, state = c("ready", "completed"), queue = "q1")$id),
+    c("done", "waiting"))
+  expect_identical(ca_tasks(db, id = c("elsewhere", "absent"))$id, "elsewhere")
+  expect_identical(nrow(ca_tasks(db, state = character())), 0L)
+  expect_identical(nrow(ca_tasks(db, limit = 1)), 1L)
+  expect_error(ca_tasks(db, state = "done"), class = "canard_input_error")
+  expect_error(ca_tasks(db, limit = 0), class = "canard_input_error")
+
+  expect_identical(ca_result(db, "done"), list(total = 3L))
+  expect_null(ca_result(db, "null-result"))
+  error <- tryCatch(ca_result(db, "waiting"), error = identity)
+  expect_true(inherits(error, "canard_result_error"))
+  expect_identical(error$state, "ready")
+  expect_identical(tryCatch(ca_result(db, "absent"), error = identity)$state, NA_character_)
+})
+
+# Closing attempts every owned cleanup step and reports failures together.
+local({
+  path <- tempfile(fileext = ".duckdb")
+  withr::defer(unlink(c(path, paste0(path, ".wal"))))
+  db <- ca_open(path)
+  ca_spawn(db, "work", id = "survives-close")
+  db@server <- TRUE
+  db@uri <- "quack:127.0.0.1:1"
+  error <- tryCatch(ca_close(db), error = identity)
+  expect_true(inherits(error, "canard_close_error"))
+  expect_length(error$errors, 1L)
+  expect_false(DBI::dbIsValid(db@con))
+  expect_null(ca_close(db))
+  reopened <- local_database(path)
+  expect_identical(ca_tasks(reopened)$id, "survives-close")
+})
+
+# Unsigned extensions are refused unless opted into at database creation.
+local({
+  expect_error(ca_open(allow_unsigned_extensions = NA), class = "canard_input_error")
+  signed <- local_database()
+  expect_identical(DBI::dbGetQuery(signed@con,
+    "SELECT current_setting('allow_unsigned_extensions') AS value")$value, FALSE)
+  unsigned <- ca_open(allow_unsigned_extensions = TRUE)
+  withr::defer(ca_close(unsigned))
+  expect_identical(DBI::dbGetQuery(unsigned@con,
+    "SELECT current_setting('allow_unsigned_extensions') AS value")$value, TRUE)
+})

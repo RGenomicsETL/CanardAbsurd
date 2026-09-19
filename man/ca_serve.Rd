@@ -4,17 +4,30 @@
 \alias{ca_serve}
 \title{Serve a workflow database over Quack}
 \usage{
-ca_serve(path, uri = "quack:127.0.0.1:9494", token, extension = NULL)
+ca_serve(
+  path,
+  uri = "quack:127.0.0.1:9494",
+  token,
+  extension = NULL,
+  allow_unsigned_extensions = FALSE
+)
 }
 \arguments{
 \item{path}{DuckDB database path, or \code{":memory:"}.}
 
 \item{uri}{Quack endpoint, including a port when not using the default.}
 
-\item{token}{Nonempty shared authentication token.}
+\item{token}{Shared authentication token. Quack currently requires at least
+four characters. A holder can run any SQL, including file access, with the
+server process's privileges; give it only to trusted workers and services.}
 
 \item{extension}{Optional path to a compatible signed Quack extension.
 \code{NULL} loads an explicitly preinstalled \code{quack} extension.}
+
+\item{allow_unsigned_extensions}{Development-only opt-in for loading an
+unsigned build of the native coordinator. It lets any SQL on this database
+load arbitrary native code into the owning process. On a served database,
+that includes every Quack token holder. Leave it \code{FALSE} in deployments.}
 }
 \value{
 A local S7 \code{CanardConnection} handle owning the server.

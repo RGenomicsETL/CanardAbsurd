@@ -91,12 +91,11 @@ ca_claim <- function(db, queue = "default", worker = paste0("R-", Sys.getpid()),
     .ca_query(db, "reap", reap)
     rows <- .ca_query(db, "claim", params)
     if (nrow(rows) == 0L) return(NULL)
-    type <- .ca_read_type(rows$input_rtype[[1L]])
     task <- CanardTask(db = db, id = rows$id[[1L]], name = rows$name[[1L]],
       input = NULL, token = rows$token[[1L]], attempt = rows$attempt[[1L]],
       lease_seconds = as.double(request@lease_seconds), seen = new.env(parent = emptyenv()))
-    value <- .ca_owned(task, "value", projection = DBI::SQL(.ca_projection("input", type, db@con)))
-    task@input <- .ca_restore(value$value, type)
+    type <- .ca_decoded(.ca_read_type(rows$input_rtype[[1L]]), task@id, "claim")
+    task@input <- .ca_read_value(task, "value", type, "input")
     task
   }
 }
@@ -122,17 +121,19 @@ ca_inspect <- function(db, id) {
   record <- as.list(rows[1L, setdiff(names(rows), internal), drop = FALSE])
   present <- which(!is.na(rows$checkpoint_name))
   rtypes <- c(list(rows$input_rtype[[1L]], rows$result_rtype[[1L]]), rows$checkpoint_rtype[present])
-  types <- lapply(rtypes, function(type) {
-    if (is.null(type)) list(kind = "NULL", length = 0L) else .ca_read_type(type)
-  })
   expressions <- c("input", "result", paste0("map_extract_value(checkpoints, ",
     DBI::dbQuoteString(db@con, rows$checkpoint_name[present]), ").value"))
-  projections <- vapply(seq_along(types), function(i) {
+  types <- .ca_decoded(lapply(rtypes, function(type) {
+    if (is.null(type)) list(kind = "NULL", length = 0L) else .ca_read_type(type)
+  }), id, "inspect")
+  projections <- .ca_decoded(vapply(seq_along(types), function(i) {
     paste0(.ca_projection(expressions[[i]], types[[i]], db@con), " AS v", i)
-  }, character(1L))
+  }, character(1L)), id, "inspect")
   values <- .ca_query(db, "values", list(id = id,
     projection = DBI::SQL(paste(projections, collapse = ", "))))
-  decoded <- lapply(seq_along(types), function(i) .ca_restore(values[[i]], types[[i]]))
+  decoded <- .ca_decoded(lapply(seq_along(types), function(i) {
+    .ca_restore(values[[i]], types[[i]])
+  }), id, "values")
   record[c("input", "result")] <- decoded[1:2]
   checkpoints <- lapply(seq_along(present), function(i) {
     checkpoint <- list(kind = rows$checkpoint_kind[[present[[i]]]])
@@ -142,6 +143,57 @@ ca_inspect <- function(db, id) {
   names(checkpoints) <- rows$checkpoint_name[present]
   record["checkpoints"] <- list(checkpoints)
   record
+}
+
+#' List task metadata
+#'
+#' Reads state, counters, ownership, and timestamps for many tasks in one
+#' query, without inputs, results, or checkpoint values. Use it to poll a jobs
+#' view; use [ca_result()] or [ca_inspect()] for one task's values.
+#'
+#' @inheritParams ca_spawn
+#' @param queue Optional queue name.
+#' @param state Optional character vector of task states: `"ready"`,
+#'   `"running"`, `"completed"`, `"failed"`, or `"cancelled"`.
+#' @param id Optional character vector of task IDs.
+#' @param limit Maximum number of rows, most recently updated first.
+#' @return A data frame with one row per task: `id`, `queue`, `name`, `state`,
+#'   `priority`, `attempt`, `failures`, `max_failures`, `available_at`, `worker`,
+#'   `lease_until`, `error`, `created_at`, and `updated_at`.
+#' @export
+ca_tasks <- function(db, queue = NULL, state = NULL, id = NULL, limit = 100L) {
+  request <- .ca_input(CanardListing, db = db, queue = queue, state = state, id = id,
+    limit = limit)
+  vector <- function(values) {
+    if (is.null(values)) return(DBI::SQL("NULL"))
+    DBI::SQL(paste0("[", paste(DBI::dbQuoteString(db@con, values), collapse = ", "), "]"))
+  }
+  queue <- if (is.null(request@queue)) DBI::SQL("NULL") else request@queue
+  .ca_query(request@db, "tasks", list(queue = queue, states = vector(request@state),
+    ids = vector(request@id), limit = as.integer(request@limit)))
+}
+
+#' Retrieve a completed task's result
+#'
+#' Reads only the result value, not the input or checkpoints.
+#'
+#' @inheritParams ca_spawn
+#' @return The stored R result. A task that is unknown or not completed raises
+#'   `canard_result_error` with its `id` and `state` (`NA` when unknown).
+#' @export
+ca_result <- function(db, id) {
+  request <- .ca_input(CanardLookup, db = db, id = id)
+  rows <- .ca_query(request@db, "result", list(id = request@id))
+  state <- if (nrow(rows) == 0L) NA_character_ else rows$state[[1L]]
+  if (!identical(state, "completed")) {
+    stop(errorCondition(paste0("Task ", request@id, " has no result (state: ", state, ")"),
+      class = c("canard_result_error", "canard_error"), id = request@id, state = state))
+  }
+  type <- .ca_decoded(.ca_read_type(rows$result_rtype[[1L]]), request@id, "result")
+  projection <- .ca_decoded(.ca_projection("result", type, request@db@con), request@id, "result")
+  values <- .ca_query(request@db, "values", list(id = request@id,
+    projection = DBI::SQL(paste(projection, "AS value"))))
+  .ca_decoded(.ca_restore(values$value, type), request@id, "values")
 }
 
 #' Extend a live task lease
@@ -169,10 +221,13 @@ ca_complete <- function(task, result = NULL) {
 
 .ca_finish <- function(task, result, return_value = TRUE) {
   payload <- .ca_payload(result, task@db@con)
-  projection <- if (return_value) .ca_projection("result", payload$type, task@db@con) else "NULL::BOOLEAN"
-  rows <- .ca_owned(task, "complete", result = payload$value, rtype = payload$rtype,
-    projection = DBI::SQL(projection))
-  if (return_value) .ca_restore(rows$value, payload$type) else invisible(NULL)
+  if (return_value) {
+    return(.ca_read_value(task, "complete", payload$type, "result",
+      result = payload$value, rtype = payload$rtype))
+  }
+  .ca_owned(task, "complete", result = payload$value, rtype = payload$rtype,
+    projection = DBI::SQL("NULL::BOOLEAN"))
+  invisible(NULL)
 }
 
 #' Record a task failure

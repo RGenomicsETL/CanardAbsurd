@@ -94,16 +94,7 @@ sum_values <- function(input, ctx) {
 }
 id <- ca_spawn(worker, "sum", list(values = list(10, 20, 12)),
                id = "remote-sum-001", queue = "reports")
-delays <- c(0.01, 0.05, 0.1)
-withCallingHandlers(
-  ca_work(worker, list(sum = sum_values), queue = "reports", max_tasks = 1),
-  canard_retryable = function(conflict) {
-    if (conflict$attempts <= length(delays)) {
-      Sys.sleep(delays[[conflict$attempts]])
-      invokeRestart("canard_retry")
-    }
-  }
-)
+ca_work(worker, list(sum = sum_values), queue = "reports", max_tasks = 1)
 task <- ca_inspect(worker, id)
 list(runtime = ca_runtime(worker), state = task$state, result = task$result)
 ```
@@ -125,10 +116,13 @@ between named checkpoint calls or explicit heartbeats. `poll_seconds` controls i
 polling, and `idle_timeout` controls when an idle worker returns. A worker that
 only knows one handler will not claim other task names.
 
-SQL retries are independent of the task's failure budget. The calling handler
-above permits three retries per conflicting statement, with delays chosen by
-the caller. The restart repeats only that SQL statement, not the R handler or
-its external effects. Storage errors include the operation, total attempts,
+Workers that poll together select the same eligible row, and DuckDB aborts the
+losing statement with a write conflict. `ca_work()` repeats such a statement up
+to `conflict_retries` times (8 by default) with jittered backoff; the retry
+repeats only that SQL statement, not the R handler or its external effects, and
+does not consume the task's failure budget. Set `conflict_retries = 0` to supply
+your own `canard_retryable` policy, as producers calling `ca_spawn()` directly
+must. Storage errors include the operation, total attempts,
 elapsed seconds, and the original DBI condition. Transport failures propagate
 even when raised by a step inside a handler and offer no retry restart.
 Released drivers require a message-based compatibility adapter for conflict
@@ -152,7 +146,13 @@ rather than wrapping them in externally managed transactions.
 
 ## Protect the endpoint
 
-The token grants trusted database access, not per-queue tenant isolation. Use
-network restrictions and TLS at authenticated ingress for non-local deployments.
-Do not expose an unprotected Quack server to the internet. Package loading and
+The token grants arbitrary SQL, not access to particular task operations. SQL
+can read and write files and load extensions with the server process's
+operating-system privileges, and a token holder can rewrite any task row without
+a lease. Treat every token holder as trusted: the lease protocol fences workers
+that follow it, not adversarial ones. A trusted application service can hold the
+token and translate authorized requests into fixed operations; browsers and
+untrusted computation must never receive it or choose the SQL. Use network
+restrictions and TLS at authenticated ingress for non-local deployments. Do not
+expose an unprotected Quack server to the internet. Package loading and
 connections never install extensions; extension acquisition is explicit setup.

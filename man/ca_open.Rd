@@ -4,10 +4,15 @@
 \alias{ca_open}
 \title{Open a local workflow database}
 \usage{
-ca_open(path = ":memory:")
+ca_open(path = ":memory:", allow_unsigned_extensions = FALSE)
 }
 \arguments{
 \item{path}{DuckDB database path, or \code{":memory:"}.}
+
+\item{allow_unsigned_extensions}{Development-only opt-in for loading an
+unsigned build of the native coordinator. It lets any SQL on this database
+load arbitrary native code into the owning process. On a served database,
+that includes every Quack token holder. Leave it \code{FALSE} in deployments.}
 }
 \value{
 An S7 \code{CanardConnection} handle.

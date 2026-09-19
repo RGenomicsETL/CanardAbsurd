@@ -1,6 +1,6 @@
 ## Test environment
 
-- Ubuntu 24.04.3 LTS, R-devel (2026-04-24), DuckDB R 1.5.5
+- Ubuntu 24.04.3 LTS, R 4.6.0 (2026-04-24), DuckDB R 1.5.5
 
 ## R CMD check results
 

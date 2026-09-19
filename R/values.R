@@ -212,6 +212,22 @@ NULL
   })
 }
 
+# A stored value that cannot be decoded is a storage failure, like a failed read.
+.ca_decoded <- function(value, id, operation) {
+  tryCatch(value, error = function(e) {
+    stop(errorCondition(paste("Unable to restore a stored value:", conditionMessage(e)),
+      class = c("canard_restore_error", "canard_storage_error", "canard_error"),
+      id = id, operation = operation, parent = e))
+  })
+}
+
+# Run a lease-fenced statement whose projection returns one typed value.
+.ca_read_value <- function(task, statement, type, expr, ...) {
+  projection <- .ca_decoded(.ca_projection(expr, type, task@db@con), task@id, statement)
+  rows <- .ca_owned(task, statement, ..., projection = DBI::SQL(projection))
+  .ca_decoded(.ca_restore(rows$value, type), task@id, statement)
+}
+
 .ca_read_type <- function(value) {
   out <- lapply(value, function(column) {
     field <- if (is.list(column)) column[[1L]] else column

@@ -14,7 +14,7 @@ ca_coordinator_start(
 \arguments{
 \item{db}{A local handle returned by \code{\link[=ca_open]{ca_open()}} or \code{\link[=ca_serve]{ca_serve()}}.}
 
-\item{extension}{Optional path to a compatible signed coordinator extension.
+\item{extension}{Optional path to a compatible coordinator extension.
 \code{NULL} loads an explicitly preinstalled \code{canard_coordinator} extension.}
 
 \item{poll_milliseconds}{Delay between maintenance polls, in milliseconds.}
@@ -33,5 +33,12 @@ dedicated DuckDB connection and C API v1 pending execution.
 \details{
 The coordinator is one-shot for the lifetime of this database handle. Call
 \code{\link[=ca_close]{ca_close()}} or \code{\link[=ca_coordinator_stop]{ca_coordinator_stop()}} to join its thread and release its
-connection before the owning DuckDB database is closed.
+connection before the owning DuckDB database is closed. The extension holds
+that connection from the moment it loads, so closing the DBI connection
+directly leaves the database open, locked, and maintained until the process
+exits.
+
+No signed build is distributed. A locally built extension loads only into a
+database opened with \code{allow_unsigned_extensions = TRUE}, a development-only
+setting; see \code{\link[=ca_open]{ca_open()}}.
 }

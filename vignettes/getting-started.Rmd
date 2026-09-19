@@ -125,6 +125,17 @@ A zero-second sleep demonstrates the state transition without delaying the
 render. Positive durations use the database clock. Sleeps do not consume the
 failure budget.
 
+## Watch tasks without loading their values
+
+`ca_tasks()` lists state, attempts, failures and timestamps for many tasks in
+one query, without reading inputs, results or checkpoints. `ca_result()` reads
+one completed task's result. `ca_inspect()` reads everything for one task.
+
+```{r watch}
+ca_tasks(db, state = "completed")[, c("id", "name", "attempt", "failures")]
+ca_result(db, "replay-001")
+```
+
 ## Several samples, then a cohort
 
 For genomics work, one sample task could have named steps for alignment and gVCF

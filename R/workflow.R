@@ -7,7 +7,7 @@
   saved_kind <- rows$checkpoint_kind[[1L]]
   saved <- if (is.na(saved_kind)) NULL else list(kind = saved_kind)
   if (!is.null(saved) && !is.null(rows$checkpoint_rtype[[1L]])) {
-    saved$type <- .ca_read_type(rows$checkpoint_rtype[[1L]])
+    saved$type <- .ca_decoded(.ca_read_type(rows$checkpoint_rtype[[1L]]), task@id, "enter")
   }
   if (!is.null(saved) && !identical(saved$kind, kind)) {
     stop(errorCondition(paste("Checkpoint kind differs for step:", name),
@@ -41,18 +41,11 @@ ca_step <- function(task, name, fn) {
   saved <- .ca_enter_step(request@task, request@name, "step")
   expr <- paste0("map_extract_value(checkpoints, ",
     DBI::dbQuoteString(task@db@con, request@name), ").value")
-  if (!is.null(saved)) {
-    rows <- .ca_owned(task, "value",
-      projection = DBI::SQL(.ca_projection(expr, saved$type, task@db@con)))
-    return(.ca_restore(rows$value, saved$type))
-  }
+  if (!is.null(saved)) return(.ca_read_value(task, "value", saved$type, expr))
   value <- request@fn()
   payload <- .ca_payload(value, task@db@con)
-  rows <- .ca_owned(task, "checkpoint", name = request@name,
-    value = payload$value, rtype = payload$rtype,
-    projection = DBI::SQL(.ca_projection(expr, payload$type, task@db@con)),
-    seconds = task@lease_seconds)
-  .ca_restore(rows$value, payload$type)
+  .ca_read_value(task, "checkpoint", payload$type, expr, name = request@name,
+    value = payload$value, rtype = payload$rtype, seconds = task@lease_seconds)
 }
 
 #' Suspend a workflow until a database-clock deadline
@@ -133,7 +126,18 @@ ca_run <- function(task, handler, failure_delay = 0) {
 #' Each worker executes one attempt at a time. Scale with independent R processes
 #' connected through Quack. Only registered handler names are claimed. Calls to
 #' named steps and [ca_heartbeat()] renew leases; no background R thread does so.
+#' Use [ca_process()] to supervise external commands that outlast a lease.
 #' The worker never terminates its host process on lease loss.
+#'
+#' Competing workers select the same eligible row, and DuckDB aborts the losing
+#' statement with a write conflict. The worker therefore retries each known
+#' conflict, repeating only the aborted SQL statement and never an R callback.
+#' Retries back off exponentially from 10 milliseconds to at most half a second,
+#' with jitter taken from the clock and process ID so the R random number stream
+#' is unchanged. The default of 8 retries adds at most about 1.6 seconds of delay
+#' to one statement. Before each retry the worker signals `canard_conflict_retry`;
+#' see [ca_conditions()]. An exhausted budget propagates the `canard_conflict`
+#' error. Lease loss and ambiguous transport failures are never retried.
 #'
 #' @inheritParams ca_claim
 #' @inheritParams ca_run
@@ -143,6 +147,9 @@ ca_run <- function(task, handler, failure_delay = 0) {
 #' @param poll_seconds Positive delay when no work is found.
 #' @param idle_timeout Nonnegative seconds without a claim before returning.
 #'   `Inf` waits indefinitely. Zero drains currently eligible work.
+#' @param conflict_retries Nonnegative number of automatic retries for each
+#'   statement aborted by a known write conflict. Zero installs no retry policy,
+#'   leaving `canard_retryable` to the caller's own calling handler.
 #' @param on_result Optional function called with each [ca_run()] outcome after
 #'   persistence. The default warns about handler failures with
 #'   `canard_task_failed`. A supplied callback owns outcome reporting instead.
@@ -153,33 +160,49 @@ ca_run <- function(task, handler, failure_delay = 0) {
 ca_work <- function(db, handlers, queue = "default", max_tasks = Inf,
                     poll_seconds = 0.1, idle_timeout = Inf,
                     lease_seconds = 30, worker = paste0("R-", Sys.getpid()),
-                    reap_limit = 64L, failure_delay = 0, on_result = NULL) {
+                    reap_limit = 64L, failure_delay = 0, conflict_retries = 8L,
+                    on_result = NULL) {
   settings <- .ca_input(CanardWorker, handlers = handlers, max_tasks = max_tasks,
     poll_seconds = poll_seconds, idle_timeout = idle_timeout,
-    failure_delay = failure_delay, on_result = on_result)
+    failure_delay = failure_delay, conflict_retries = conflict_retries,
+    on_result = on_result)
   request <- .ca_input(CanardClaim, db = db, queue = queue, worker = worker,
     lease_seconds = lease_seconds, task_names = names(settings@handlers), reap_limit = reap_limit)
   claim <- .ca_claimant(request)
   runners <- lapply(settings@handlers, .ca_runner, failure_delay = settings@failure_delay)
   count <- 0L
   idle_since <- proc.time()[["elapsed"]]
-  while (count < settings@max_tasks) {
-    task <- claim()
-    if (is.null(task)) {
-      remaining <- settings@idle_timeout - (proc.time()[["elapsed"]] - idle_since)
-      if (remaining <= 0) break
-      Sys.sleep(min(settings@poll_seconds, remaining))
-      next
+  work <- function() {
+    while (count < settings@max_tasks) {
+      task <- claim()
+      if (is.null(task)) {
+        remaining <- settings@idle_timeout - (proc.time()[["elapsed"]] - idle_since)
+        if (remaining <= 0) break
+        Sys.sleep(min(settings@poll_seconds, remaining))
+        next
+      }
+      outcome <- runners[[task@name]](task)
+      if (!is.null(settings@on_result)) {
+        settings@on_result(outcome)
+      } else if (!is.null(outcome$error)) {
+        warning(warningCondition(paste("Task handler failed:", task@id),
+          class = "canard_task_failed", parent = outcome$error, outcome = outcome))
+      }
+      count <<- count + 1L
+      idle_since <<- proc.time()[["elapsed"]]
     }
-    outcome <- runners[[task@name]](task)
-    if (!is.null(settings@on_result)) {
-      settings@on_result(outcome)
-    } else if (!is.null(outcome$error)) {
-      warning(warningCondition(paste("Task handler failed:", task@id),
-        class = "canard_task_failed", parent = outcome$error, outcome = outcome))
-    }
-    count <- count + 1L
-    idle_since <- proc.time()[["elapsed"]]
   }
+  retries <- settings@conflict_retries
+  if (retries == 0) work() else withCallingHandlers(work(), canard_retryable = function(conflict) {
+    if (conflict$attempts > retries) return()
+    # Clock and PID jitter keeps the caller's RNG stream untouched.
+    jitter <- ((as.double(Sys.time()) * 1e6 + Sys.getpid() * 7919) %% 1009) / 1009
+    delay <- min(0.5, 0.01 * 2^(conflict$attempts - 1)) * (0.5 + jitter / 2)
+    signalCondition(structure(class = c("canard_conflict_retry", "condition"), list(
+      message = paste("Retrying conflicting statement:", conflict$operation), call = NULL,
+      conflict = conflict, attempts = conflict$attempts, delay = delay)))
+    Sys.sleep(delay)
+    invokeRestart("canard_retry")
+  })
   invisible(count)
 }

@@ -166,8 +166,9 @@ flowchart LR
 
 The checkpoint does not make an external action transactional. Use an
 idempotency key where that external system enforces one. A lease rejects
-stale writes; it does not stop a process already running. Heartbeat long
-callbacks.
+stale writes; it does not stop a process already running. Run long
+external commands with `ca_process()`, which renews the lease while they
+run and kills them when the lease is lost.
 
 ## Use it with `targets`
 

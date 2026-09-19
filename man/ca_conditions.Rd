@@ -21,6 +21,8 @@ classified by the compatibility adapter described below.
 \item \code{canard_lease_lost} and \code{canard_protocol_error} are storage errors with \code{id}
 and \code{operation}. Lease loss also carries the claim \code{attempt}.
 \item \code{canard_spawn_conflict} carries the conflicting \code{id}.
+\item \code{canard_result_error} carries the \code{id} and \code{state} of a task without a
+result; see \code{\link[=ca_result]{ca_result()}}.
 \item \code{canard_replay_error} carries \code{id} and checkpoint \code{name}.
 \item \code{canard_schema_error} carries the unsupported \code{version}.
 \item \code{canard_extension_error} preserves the load failure in \code{parent}.
@@ -32,9 +34,29 @@ A known conflict first signals \code{canard_retryable}, a notification with the
 same fields as the storage error. A caller's \code{withCallingHandlers()} handler
 can wait and invoke the \code{canard_retry} restart to repeat only that SQL
 statement. If the handler returns without invoking the restart, or no handler
-is supplied, the conflict propagates as an error. No default retry schedule
-or retry limit is imposed. Errors raised by a calling handler propagate to
-its caller. Other storage failures offer no retry restart.
+is supplied, the conflict propagates as an error. Individual operations impose
+no retry schedule. \code{\link[=ca_work]{ca_work()}} installs a bounded default; \code{conflict_retries = 0}
+removes it, and a calling handler established inside a task handler runs
+before it. Errors raised by a calling handler propagate to its caller. Other
+storage failures offer no retry restart.
+
+\code{canard_conflict_retry} is a notification signalled by \code{\link[=ca_work]{ca_work()}} before it
+repeats a conflicting statement. It carries the \code{conflict} notification, its
+\code{attempts}, and the \code{delay} in seconds. Ignoring it changes nothing.
+
+\code{canard_restore_error} is a storage error raised when a value read under the
+package protocol cannot be restored as its recorded R type. It carries \code{id}
+and \code{operation}, and the decoding failure in \code{parent}. As with a failed read,
+no handler failure is recorded and the callback that produced a checkpoint is
+not rerun.
+
+\code{canard_close_error} reports cleanup failures from \code{\link[=ca_close]{ca_close()}}. Every owned
+resource is still released; \code{errors} lists each failure in order, and \code{parent}
+is the first.
+
+\code{canard_process_error} reports a supervised command from \code{\link[=ca_process]{ca_process()}} that
+exited unsuccessfully or exceeded its timeout. It carries \code{id}, \code{status}
+(\code{NA} after a timeout), and the attempt \code{directory} containing its logs.
 
 Current DuckDB R rethrows drop structured fields
 (\url{https://github.com/duckdb/duckdb-r/issues/2711}), and released Quack builds
@@ -44,7 +66,9 @@ metadata, a compatibility adapter recognizes exact tested conflict messages
 and duplicate-key messages for the submitted ID. This depends on upstream
 display wording, not a stable protocol. Unknown forms propagate without a
 retry restart. Structured non-transaction errors take precedence over text.
-Tests cover installed DuckDB R 1.5.3 and 1.5.5 with their community Quack builds.
+The package requires DuckDB R 1.5.5 or newer; tests use its community
+Quack build. Earlier probes on 1.5.3 motivated the adapter, but 1.5.3 is
+not a supported runtime.
 
 \code{canard_suspended} is a control-flow condition, not an error. It carries \code{id}
 and \code{attempt} and unwinds to \code{\link[=ca_run]{ca_run()}} after a durable sleep is saved.

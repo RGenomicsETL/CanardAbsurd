@@ -62,9 +62,14 @@ stateDiagram-v2
 
 Each state transition is one server-side SQL statement; the R handler never
 runs inside its transaction. A network failure does not prove that a request was
-never executed. Callers can handle `canard_retryable` and invoke its
-`canard_retry` restart to repeat a known aborted write conflict. Without that
-explicit decision, the error propagates.
+never executed, so it is surfaced rather than retried. A known write conflict is
+different: DuckDB aborted the statement, so repeating it is safe. Competing
+workers conflict routinely because they select the same eligible row.
+`ca_work()` therefore repeats each conflicting statement up to
+`conflict_retries` times (8 by default) with jittered exponential backoff,
+without rerunning an R callback. Outside a worker, callers handle
+`canard_retryable` and invoke its `canard_retry` restart themselves; without
+that decision the conflict propagates.
 
 Recovery replaces an expired lease when the failure budget allows another
 attempt. The `attempt` counter counts claims, including sleep resumptions. The
@@ -80,7 +85,7 @@ another attempt.
 A queue with no polling workers still needs cleanup when its final attempt
 expires. The optional `canard_coordinator` extension performs that cleanup across
 all queues, on a dedicated connection and native thread in the database-owner
-process. It increments the failure count, records `Lease expired`, clears the
+process. It increments the failure count, records `worker lease expired`, clears the
 worker/token/deadline, and marks an exhausted task failed in one SQL statement.
 
 ```mermaid
@@ -102,14 +107,20 @@ which downstream tasks are ready.
 `ca_coordinator_status()` reports state, poll/reaped/error counters, and the last
 error. Starting the loop is not proof that maintenance SQL succeeds; inspect
 those counters and errors. `ca_coordinator_stop()` joins the thread and releases
-its connection. `ca_close()` does this automatically when the handle started the
-coordinator. The instance is one-shot: after stop, use a fresh database instance
-to start another coordinator.
+its connection. `ca_close()` does this whenever the handle loaded the extension,
+and still does it if stopping the Quack endpoint fails. The instance is
+one-shot: after stop, use a fresh database instance to start another
+coordinator. The extension holds its connection from the moment it loads, so
+closing the DBI connection directly, bypassing `ca_close()`, keeps the database
+open and locked until the process exits.
 
 The extension is built separately against the stable DuckDB C extension API.
 Loading and starting it are explicit; opening an ordinary database does neither.
-See the [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
-for build, signing, and executable native integration tests.
+No signed build is distributed. A local build loads only into a database opened
+with `allow_unsigned_extensions = TRUE`, a development-only setting that lets
+any SQL on that database load native code. The native path is experimental. See
+the [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
+for build and executable native integration tests.
 
 ## A replaced claim cannot write
 
@@ -244,9 +255,49 @@ with DuckDB. Use a stable business-level idempotency key for payments, messages,
 and other mutations. Deduplicating task submission does not deduplicate those
 external effects.
 
-Long operations must call `ca_heartbeat(ctx)` before their lease expires. Calls
-to `ca_step()` and `ca_sleep()` renew leases, but no background R thread renews
-a lease while a callback blocks.
+## Supervise work longer than a lease
+
+Calls to `ca_step()`, `ca_sleep()` and `ca_heartbeat()` renew a lease, but no
+background R thread renews it while a callback blocks. A step that blocks in
+`system2()` longer than its lease lets another worker reclaim the task and start
+the same work again. The database still rejects the old worker's writes, but not
+its files.
+
+`ca_process()` runs the command in its own process and renews the lease from
+the worker while it runs. It checks the lease before starting, writes logs to
+`stdout.log` and `stderr.log`, and gives each attempt its own `attempt-<n>`
+directory, so an obsolete attempt cannot overwrite accepted files. Lease loss,
+including cancellation, a timeout, or an error in the supervising R code kills
+the command's process tree. Returning its paths from a `ca_step()` callback
+publishes them only while the lease is held. For blocking R or native
+computation, run an `Rscript` the same way.
+
+```{r process}
+rscript <- file.path(R.home("bin"),
+  if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
+root <- tempfile("canard-work-")
+withr::defer(unlink(root, recursive = TRUE))
+align <- function(input, ctx) {
+  ca_step(ctx, "align", function() {
+    directory <- ca_process(ctx, rscript,
+      c("-e", "Sys.sleep(1.5); writeLines('aligned', 'sample.bam')"),
+      directory = file.path(root, ctx@id, "align"), heartbeat_seconds = 0.2)
+    file.path(directory, "sample.bam")
+  })
+}
+id <- ca_spawn(db, "align", id = "sample-101")
+ca_work(db, list(align = align), max_tasks = 1, lease_seconds = 0.5)
+task <- ca_tasks(db, id = id)
+list(state = task$state, attempts = task$attempt,
+     output = basename(dirname(ca_result(db, id))))
+```
+
+The command ran three times longer than the half-second lease without a
+reclaim. Supervision cannot rule out every physical overlap: a paused or
+partitioned worker can outlive its lease before its next heartbeat. For Slurm
+or another scheduler, use that backend's own submission, discovery and
+cancellation identities; supervising a submit command does not supervise the
+remote job.
 
 ## Operational limits
 
@@ -255,6 +306,13 @@ a lease while a callback blocks.
   in one update; it is not a throughput guarantee.
 - Inputs, results, checkpoints and error text have no package-imposed byte quota.
   Large values still consume engine memory, disk and transport capacity.
+  Values travel as SQL literals, and each new checkpoint rewrites the task's
+  checkpoint map, so cost grows with the number and size of saved steps. Store
+  file references rather than bulk data, and measure a workload with
+  [`tools/benchmark.R`](https://github.com/RGenomicsETL/CanardAbsurd/blob/main/tools/benchmark.R)
+  before relying on many large checkpoints.
+- `ca_tasks()` lists metadata without reading payloads; use it to poll many
+  tasks. `ca_inspect()` reads every value of one task.
 - Claims and checkpoint replay use a fenced typed read after their lease UPDATE.
   A failure of that read does not undo the UPDATE or cause a handler to run.
   See the compatibility guide for the additional round trip and recovery rules.

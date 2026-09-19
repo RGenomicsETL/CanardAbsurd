@@ -63,8 +63,25 @@ Rscript test/test-v1.R /absolute/path/to/canard_coordinator.duckdb_extension
 The test checks exhausted tasks in multiple queues, unchanged retryable/live/
 terminal tasks, ownership cleanup, argument validation, and the one-shot
 lifecycle. Cleanup also runs when an assertion fails. Unsigned extensions are
-enabled only on its temporary development connection; production artifacts
-need the normal DuckDB extension signing and distribution path.
+enabled only on its temporary development connection.
+
+Through the package, load a development build into a database opened with the
+explicit, development-only opt-in:
+
+```r
+db <- CanardAbsurd::ca_open(path, allow_unsigned_extensions = TRUE)
+CanardAbsurd::ca_coordinator_start(db, "/absolute/path/to/canard_coordinator.duckdb_extension")
+```
+
+That setting lets any SQL on the database load native code, including every
+Quack token holder when the database is served. No signed build is distributed;
+deployments without the opt-in cannot load this extension. The package lifecycle
+tests, including release of the database file on each close path, run with:
+
+```sh
+CANARDABSURD_COORDINATOR_EXTENSION=/absolute/path/to/canard_coordinator.duckdb_extension \
+  Rscript -e 'tinytest::run_test_file(system.file("tinytest", "test_coordinator.R", package = "CanardAbsurd"))'
+```
 
 This is a maintenance coordinator. It does not dispatch jobs, allocate physical
 resources, or execute R handlers.

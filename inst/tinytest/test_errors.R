@@ -254,3 +254,129 @@ local({
   expect_identical(notice$outcome$state, "failed")
   expect_identical(notice$outcome$id, id)
 })
+
+# Workers retry known conflicts by statement, observably, without touching the RNG.
+local({
+  db <- local_database()
+  id <- ca_spawn(db, "work")
+  execute <- db@query
+  writes <- effects <- 0L
+  db@query <- function(sql) {
+    if (grepl("SET checkpoints =", sql, fixed = TRUE)) {
+      writes <<- writes + 1L
+      if (writes <= 2L) stop("TransactionContext Error: Conflict on update!")
+    }
+    execute(sql)
+  }
+  retries <- list()
+  set.seed(42L)
+  seed <- .Random.seed
+  count <- withCallingHandlers(ca_work(db, list(work = function(input, ctx) {
+    ca_step(ctx, "saved", function() {
+      effects <<- effects + 1L
+      42
+    })
+  }), max_tasks = 1), canard_conflict_retry = function(retry) {
+    retries[[length(retries) + 1L]] <<- retry
+  })
+  expect_identical(count, 1L)
+  expect_identical(c(writes, effects), c(3L, 1L))
+  expect_identical(vapply(retries, `[[`, integer(1L), "attempts"), 1:2)
+  expect_identical(retries[[1L]]$conflict$operation, "checkpoint")
+  expect_true(all(vapply(retries, `[[`, numeric(1L), "delay") < 0.5))
+  expect_identical(.Random.seed, seed)
+  expect_identical(ca_inspect(db, id)$result, 42)
+})
+
+# An exhausted retry budget, or a disabled policy, propagates the conflict.
+local({
+  db <- local_database()
+  ca_spawn(db, "work")
+  execute <- db@query
+  db@query <- function(sql) {
+    if (grepl("SET state = 'running'", sql, fixed = TRUE)) {
+      stop("TransactionContext Error: Conflict on update!")
+    }
+    execute(sql)
+  }
+  error <- tryCatch(ca_work(db, list(work = identity), max_tasks = 1, conflict_retries = 2),
+    error = identity)
+  expect_true(inherits(error, "canard_conflict"))
+  expect_identical(error$operation, "claim")
+  expect_identical(error$attempts, 3L)
+
+  offered <- 0L
+  error <- tryCatch(withCallingHandlers(
+    ca_work(db, list(work = identity), max_tasks = 1, conflict_retries = 0),
+    canard_retryable = function(conflict) offered <<- offered + 1L), error = identity)
+  expect_identical(offered, 1L)
+  expect_identical(error$attempts, 1L)
+  expect_identical(ca_inspect(db, ca_tasks(db)$id)$attempt, 0L)
+})
+
+# Transport failures and lease loss are never retried by the worker policy.
+local({
+  db <- local_database()
+  ca_spawn(db, "work")
+  execute <- db@query
+  retried <- FALSE
+  db@query <- function(sql) {
+    if (grepl("SET checkpoints =", sql, fixed = TRUE)) stop("IO Error: response lost")
+    execute(sql)
+  }
+  error <- tryCatch(withCallingHandlers(
+    ca_work(db, list(work = function(input, ctx) ca_step(ctx, "s", function() 1)), max_tasks = 1),
+    canard_conflict_retry = function(retry) retried <<- TRUE), error = identity)
+  expect_false(retried)
+  expect_true(inherits(error, "canard_storage_error"))
+  expect_false(inherits(error, "canard_conflict"))
+
+  db@query <- execute
+  id <- ca_spawn(db, "work", id = "cancelled-in-handler")
+  error <- tryCatch(withCallingHandlers(
+    ca_work(db, list(work = function(input, ctx) {
+      ca_cancel(db, ctx@id)
+      ca_step(ctx, "s", function() 1)
+    }), max_tasks = 1),
+    canard_conflict_retry = function(retry) retried <<- TRUE), error = identity)
+  expect_false(retried)
+  expect_true(inherits(error, "canard_lease_lost"))
+})
+
+# A stored value that cannot be restored is a storage failure, not a handler failure.
+local({
+  db <- local_database()
+  corrupt <- function(value) {
+    type <- getFromNamespace(".ca_type", "CanardAbsurd")(value)
+    type$storage <- "not-a-storage-mode"
+    getFromNamespace(".ca_payload", "CanardAbsurd")(type, db@con)$value
+  }
+  id <- ca_spawn(db, "work", 1:2)
+  DBI::dbExecute(db@con, paste("UPDATE canard_absurd.tasks SET input_rtype =",
+    corrupt(1:2), "WHERE id = ?"), params = list(id))
+  ran <- FALSE
+  error <- tryCatch(ca_work(db, list(work = function(input, ctx) ran <<- TRUE), max_tasks = 1),
+    error = identity)
+  expect_true(inherits(error, "canard_restore_error"))
+  expect_true(inherits(error, "canard_storage_error"))
+  expect_identical(error$operation, "value")
+  expect_false(ran)
+  expect_identical(ca_tasks(db, id = id)$failures, 0L)
+
+  id <- ca_spawn(db, "work", id = "corrupt-checkpoint")
+  task <- ca_claim(db)
+  expect_identical(task@id, id)
+  ca_step(task, "saved", function() 1:2)
+  ca_fail(task, "retry")
+  DBI::dbExecute(db@con, paste("UPDATE canard_absurd.tasks SET checkpoints = map(['saved'],",
+    "[struct_pack(kind := 'step', value := (map_extract_value(checkpoints, 'saved')).value,",
+    "rtype :=", corrupt(1:2), ")]) WHERE id = ?"), params = list(id))
+  calls <- 0L
+  error <- tryCatch(ca_run(ca_claim(db), function(input, ctx) {
+    ca_step(ctx, "saved", function() calls <<- calls + 1L)
+  }), error = identity)
+  expect_true(inherits(error, "canard_restore_error"))
+  expect_identical(calls, 0L)
+  expect_identical(ca_tasks(db, id = id)$failures, 1L)
+  expect_error(ca_inspect(db, id), class = "canard_restore_error")
+})

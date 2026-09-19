@@ -60,6 +60,8 @@ reference:
   - title: Task administration
     contents:
       - ca_spawn
+      - ca_tasks
+      - ca_result
       - ca_inspect
       - ca_cancel
   - title: Workflow execution
@@ -70,6 +72,7 @@ reference:
       - ca_step
       - ca_sleep
       - ca_heartbeat
+      - ca_process
       - ca_complete
       - ca_fail
       - ca_conditions

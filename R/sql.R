@@ -62,6 +62,8 @@
 #' * `canard_lease_lost` and `canard_protocol_error` are storage errors with `id`
 #'   and `operation`. Lease loss also carries the claim `attempt`.
 #' * `canard_spawn_conflict` carries the conflicting `id`.
+#' * `canard_result_error` carries the `id` and `state` of a task without a
+#'   result; see [ca_result()].
 #' * `canard_replay_error` carries `id` and checkpoint `name`.
 #' * `canard_schema_error` carries the unsupported `version`.
 #' * `canard_extension_error` preserves the load failure in `parent`.
@@ -72,9 +74,29 @@
 #' same fields as the storage error. A caller's `withCallingHandlers()` handler
 #' can wait and invoke the `canard_retry` restart to repeat only that SQL
 #' statement. If the handler returns without invoking the restart, or no handler
-#' is supplied, the conflict propagates as an error. No default retry schedule
-#' or retry limit is imposed. Errors raised by a calling handler propagate to
-#' its caller. Other storage failures offer no retry restart.
+#' is supplied, the conflict propagates as an error. Individual operations impose
+#' no retry schedule. [ca_work()] installs a bounded default; `conflict_retries = 0`
+#' removes it, and a calling handler established inside a task handler runs
+#' before it. Errors raised by a calling handler propagate to its caller. Other
+#' storage failures offer no retry restart.
+#'
+#' `canard_conflict_retry` is a notification signalled by [ca_work()] before it
+#' repeats a conflicting statement. It carries the `conflict` notification, its
+#' `attempts`, and the `delay` in seconds. Ignoring it changes nothing.
+#'
+#' `canard_restore_error` is a storage error raised when a value read under the
+#' package protocol cannot be restored as its recorded R type. It carries `id`
+#' and `operation`, and the decoding failure in `parent`. As with a failed read,
+#' no handler failure is recorded and the callback that produced a checkpoint is
+#' not rerun.
+#'
+#' `canard_close_error` reports cleanup failures from [ca_close()]. Every owned
+#' resource is still released; `errors` lists each failure in order, and `parent`
+#' is the first.
+#'
+#' `canard_process_error` reports a supervised command from [ca_process()] that
+#' exited unsuccessfully or exceeded its timeout. It carries `id`, `status`
+#' (`NA` after a timeout), and the attempt `directory` containing its logs.
 #'
 #' Current DuckDB R rethrows drop structured fields
 #'   (<https://github.com/duckdb/duckdb-r/issues/2711>), and released Quack builds
@@ -84,7 +106,9 @@
 #'   and duplicate-key messages for the submitted ID. This depends on upstream
 #'   display wording, not a stable protocol. Unknown forms propagate without a
 #'   retry restart. Structured non-transaction errors take precedence over text.
-#'   Tests cover installed DuckDB R 1.5.3 and 1.5.5 with their community Quack builds.
+#'   The package requires DuckDB R 1.5.5 or newer; tests use its community
+#'   Quack build. Earlier probes on 1.5.3 motivated the adapter, but 1.5.3 is
+#'   not a supported runtime.
 #'
 #' `canard_suspended` is a control-flow condition, not an error. It carries `id`
 #' and `attempt` and unwinds to [ca_run()] after a durable sleep is saved.

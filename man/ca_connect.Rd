@@ -9,7 +9,9 @@ ca_connect(uri = "quack:127.0.0.1:9494", token, extension = NULL)
 \arguments{
 \item{uri}{Quack endpoint, including a port when not using the default.}
 
-\item{token}{Nonempty shared authentication token.}
+\item{token}{Shared authentication token. Quack currently requires at least
+four characters. A holder can run any SQL, including file access, with the
+server process's privileges; give it only to trusted workers and services.}
 
 \item{extension}{Optional path to a compatible signed Quack extension.
 \code{NULL} loads an explicitly preinstalled \code{quack} extension.}

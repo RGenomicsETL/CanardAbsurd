@@ -13,5 +13,13 @@ ca_close(db)
 \code{NULL}, invisibly. Closing an already closed handle is harmless.
 }
 \description{
-Close a client or server
+Stops the Quack endpoint of a server handle, stops a loaded native
+coordinator, and closes the DuckDB connection. Each step is attempted even if
+an earlier one fails; the failures are then raised together as
+\code{canard_close_error}.
+}
+\details{
+After a statement on the connection has failed, DuckDB R keeps the database,
+and its file lock, until R garbage-collects that statement. Another process
+can open a file-backed database only after that collection.
 }

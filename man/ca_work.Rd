@@ -15,6 +15,7 @@ ca_work(
   worker = paste0("R-", Sys.getpid()),
   reap_limit = 64L,
   failure_delay = 0,
+  conflict_retries = 8L,
   on_result = NULL
 )
 }
@@ -45,6 +46,10 @@ recovery of leases that still have failure budget.}
 \item{failure_delay}{Nonnegative seconds before a failed task can be claimed
 again. This is separate from caller-managed SQL conflict retries.}
 
+\item{conflict_retries}{Nonnegative number of automatic retries for each
+statement aborted by a known write conflict. Zero installs no retry policy,
+leaving \code{canard_retryable} to the caller's own calling handler.}
+
 \item{on_result}{Optional function called with each \code{\link[=ca_run]{ca_run()}} outcome after
 persistence. The default warns about handler failures with
 \code{canard_task_failed}. A supplied callback owns outcome reporting instead.
@@ -58,5 +63,17 @@ outcomes without accumulating an unbounded result list inside the worker.
 Each worker executes one attempt at a time. Scale with independent R processes
 connected through Quack. Only registered handler names are claimed. Calls to
 named steps and \code{\link[=ca_heartbeat]{ca_heartbeat()}} renew leases; no background R thread does so.
+Use \code{\link[=ca_process]{ca_process()}} to supervise external commands that outlast a lease.
 The worker never terminates its host process on lease loss.
+}
+\details{
+Competing workers select the same eligible row, and DuckDB aborts the losing
+statement with a write conflict. The worker therefore retries each known
+conflict, repeating only the aborted SQL statement and never an R callback.
+Retries back off exponentially from 10 milliseconds to at most half a second,
+with jitter taken from the clock and process ID so the R random number stream
+is unchanged. The default of 8 retries adds at most about 1.6 seconds of delay
+to one statement. Before each retry the worker signals \code{canard_conflict_retry};
+see \code{\link[=ca_conditions]{ca_conditions()}}. An exhausted budget propagates the \code{canard_conflict}
+error. Lease loss and ambiguous transport failures are never retried.
 }
