@@ -20,9 +20,10 @@ quack_available <- function() {
   con <- DBI::dbConnect(duckdb::duckdb(shared_home = TRUE),
     config = list(autoinstall_known_extensions = "false"))
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  info <- DBI::dbGetQuery(con,
-    "SELECT installed FROM duckdb_extensions() WHERE extension_name = 'quack'")
-  installed <- isTRUE(info$installed[[1L]])
+  # Quack clients also load httpfs.
+  info <- DBI::dbGetQuery(con, "SELECT installed FROM duckdb_extensions()
+    WHERE extension_name IN ('quack', 'httpfs')")
+  installed <- nrow(info) == 2L && all(info$installed)
   if (!installed && identical(Sys.getenv("CANARDABSURD_REQUIRE_QUACK"), "true")) {
     stop("Quack is required for this test run")
   }

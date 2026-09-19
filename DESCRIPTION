@@ -24,6 +24,7 @@ Additional_repositories: https://rgenomicsetl.r-universe.dev,
     https://sounkou-bioinfo.r-universe.dev
 Roxygen: list(markdown = TRUE)
 SystemRequirements: The Quack extension matching the installed DuckDB runtime,
-    for remote clients and database hosting; the optional Canard coordinator
-    extension for native lease maintenance
+    for remote clients and database hosting, and the DuckDB httpfs extension
+    for remote clients; the optional Canard coordinator extension for native
+    lease maintenance
 Config/roxygen2/version: 8.0.0

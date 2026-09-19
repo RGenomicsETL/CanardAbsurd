@@ -13,4 +13,4 @@
 * `ca_tasks()` lists task metadata without payloads, and `ca_result()` reads one completed result.
 * `ca_close()` releases every owned resource even when one cleanup step fails, reporting failures as `canard_close_error`.
 * Stored values that cannot be restored raise `canard_restore_error`, a storage error, instead of being recorded as handler failures.
-* In-memory databases and Quack clients now receive the package's DuckDB configuration.
+* In-memory databases and Quack clients now receive the package's DuckDB configuration. Clients previously ran with DuckDB's defaults and silently downloaded the `httpfs` extension that Quack clients load; install `httpfs` explicitly alongside Quack (`make quack` does both).

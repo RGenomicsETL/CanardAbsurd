@@ -20,10 +20,12 @@ server process's privileges; give it only to trusted workers and services.}
 An S7 \code{CanardConnection} handle.
 }
 \description{
-Uses DuckDB's Quack client. Each state transition executes in one server-side
-SQL statement; typed value retrieval can require a separate read. The client
-owns only an in-memory DuckDB connection, not a second writable handle to the
-server's database file. With \code{extension = NULL}, the client explicitly uses
-DuckDB's shared home to find the preinstalled Quack extension; an extension
-path uses session-private storage.
+Uses DuckDB's Quack client, which also loads the \code{httpfs} extension. Install
+both explicitly: connections never download extensions. Each state
+transition executes in one server-side SQL statement; typed value retrieval
+can require a separate read. The client owns only an in-memory DuckDB
+connection, not a second writable handle to the server's database file. With
+\code{extension = NULL}, the client explicitly uses DuckDB's shared home to find
+the preinstalled extensions; an extension path uses session-private storage
+and also loads \code{httpfs.duckdb_extension} from the same directory when present.
 }

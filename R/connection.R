@@ -79,6 +79,10 @@ ca_open <- function(path = ":memory:", allow_unsigned_extensions = FALSE) {
 }
 
 .ca_load_quack <- function(con, extension) {
+  # Quack clients load httpfs. A session-private home cannot supply it, so an
+  # explicit Quack path also loads httpfs installed beside it.
+  httpfs <- if (!is.null(extension)) file.path(dirname(extension), "httpfs.duckdb_extension")
+  if (!is.null(httpfs) && file.exists(httpfs)) .ca_load_extension(con, httpfs, "httpfs", "httpfs")
   .ca_load_extension(con, extension, "quack", "Quack")
 }
 
@@ -118,12 +122,14 @@ ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL
 
 #' Connect to a workflow server
 #'
-#' Uses DuckDB's Quack client. Each state transition executes in one server-side
-#' SQL statement; typed value retrieval can require a separate read. The client
-#' owns only an in-memory DuckDB connection, not a second writable handle to the
-#' server's database file. With `extension = NULL`, the client explicitly uses
-#' DuckDB's shared home to find the preinstalled Quack extension; an extension
-#' path uses session-private storage.
+#' Uses DuckDB's Quack client, which also loads the `httpfs` extension. Install
+#' both explicitly: connections never download extensions. Each state
+#' transition executes in one server-side SQL statement; typed value retrieval
+#' can require a separate read. The client owns only an in-memory DuckDB
+#' connection, not a second writable handle to the server's database file. With
+#' `extension = NULL`, the client explicitly uses DuckDB's shared home to find
+#' the preinstalled extensions; an extension path uses session-private storage
+#' and also loads `httpfs.duckdb_extension` from the same directory when present.
 #'
 #' @inheritParams ca_serve
 #' @return An S7 `CanardConnection` handle.

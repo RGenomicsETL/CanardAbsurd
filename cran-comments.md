@@ -10,7 +10,8 @@
 
 ## External software
 
-Remote database hosting and clients require the DuckDB Quack extension. The
+Remote database hosting and clients require the DuckDB Quack extension, and
+clients also load DuckDB's httpfs extension. The
 package does not install extensions when loaded or connected. Examples,
 vignettes, and CRAN tests exercise the single-process API without Quack;
 integration tests run conditionally when a matching Quack extension is present.

@@ -39,6 +39,12 @@ local({
   expect_identical(ca_runtime(db), fixture$runtime)
   expect_true(nzchar(fixture$runtime$quack_version))
   expect_error(ca_connect(fixture$uri, "wrong-token"))
+  # A session-private client finds httpfs beside an explicit Quack path.
+  installed <- DBI::dbGetQuery(db@con,
+    "SELECT install_path FROM duckdb_extensions() WHERE extension_name = 'quack'")$install_path
+  private <- ca_connect(fixture$uri, "test-token", extension = installed)
+  expect_identical(ca_runtime(private)$schema_version, 1L)
+  ca_close(private)
   id <- ca_spawn(db, "work", list(x = NULL, quote = "'\"\\"), id = "remote'quoted")
   task <- ca_claim(db)
   expect_identical(ca_run(task, function(input, ctx) {
