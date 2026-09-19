@@ -12,32 +12,15 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-## What survives and what does not
+CanardAbsurd runs tasks **at least once** and saves named checkpoints. When a
+worker, process or connection fails:
 
-[Getting started](getting-started.html#the-concepts) defines a task, handler,
-attempt, step, checkpoint, and lease. This guide describes what those concepts
-mean when a worker, process, or connection fails.
+- the task's input, state, counters and saved steps survive;
+- a replacement worker reruns the handler, replaying saved steps;
+- a step whose callback finished but whose result was not saved runs again.
 
-CanardAbsurd provides at-least-once task execution with durable named
-checkpoints. A task input, state, lease, counters, and completed step values
-survive a worker failure. A replacement worker resumes the handler and replays
-those completed steps. Completed, failed, and cancelled tasks are terminal.
-
-This is not exactly-once execution of external effects. A worker can call an
-external service and fail before its step result is saved; a later attempt then
-calls that service again. Use an application-level idempotency key for every
-external mutation.
-
-For a shared workflow database, run one Quack server process as the writable
-DuckDB owner. Producers and workers connect through Quack rather than opening
-the database file themselves, avoiding direct multi-process DuckDB/WAL locking
-and errors.
-
-## Run the examples
-
-The examples use `ca_open()` only to inspect the state machine without a network
-or Quack installation. This in-memory database belongs to this one R process;
-it is not a shared deployment.
+Checkpointing does not make an HTTP call or a file write transactional, so give
+every external side effect an idempotency key.
 
 ```{r open}
 library(CanardAbsurd)
@@ -45,7 +28,7 @@ db <- ca_open()
 withr::defer(ca_close(db))
 ```
 
-## How task state changes
+## Task states
 
 ```mermaid
 stateDiagram-v2
@@ -60,74 +43,15 @@ stateDiagram-v2
   running --> cancelled: cancel
 ```
 
-Each state transition is one server-side SQL statement; the R handler never
-runs inside its transaction. A network failure does not prove that a request was
-never executed, so it is surfaced rather than retried. A known write conflict is
-different: DuckDB aborted the statement, so repeating it is safe. Competing
-workers conflict routinely because they select the same eligible row.
-`ca_work()` therefore repeats each conflicting statement up to
-`conflict_retries` times (8 by default) with jittered exponential backoff,
-without rerunning an R callback. Outside a worker, callers handle
-`canard_retryable` and invoke its `canard_retry` restart themselves; without
-that decision the conflict propagates.
+`completed`, `failed` and `cancelled` are terminal. Each transition is one SQL
+statement, and no handler code runs inside a transaction.
 
-Recovery replaces an expired lease when the failure budget allows another
-attempt. The `attempt` counter counts claims, including sleep resumptions. The
-`failures` counter counts reported failures and expired leases. `max_failures`
-is the threshold for terminal failure. Before claiming, `ca_claim()` and
-`ca_work()` mark a bounded batch of expired, exhausted tasks as failed in their
-selected queue. `reap_limit` defaults to 64. An expired task with failure budget
-remaining can instead be reclaimed by a worker; expiry does not by itself start
-another attempt.
+## Leases fence stale workers
 
-## Native lease maintenance
-
-A queue with no polling workers still needs cleanup when its final attempt
-expires. The optional `canard_coordinator` extension performs that cleanup across
-all queues, on a dedicated connection and native thread in the database-owner
-process. It increments the failure count, records `worker lease expired`, clears the
-worker/token/deadline, and marks an exhausted task failed in one SQL statement.
-
-```mermaid
-flowchart LR
-  Poll["worker polls its queue"] --> Reap["mark expired final attempts failed"]
-  Native["optional native maintenance<br/>polls all queues"] --> Reap
-  Reap --> DB[("DuckDB task rows")]
-  Poll --> Claim["claim eligible work<br/>or reclaim an expired retryable task"]
-  Claim --> Handler["R worker runs the handler"]
-```
-
-Use `ca_coordinator_start()` on the `ca_open()` or `ca_serve()` owner handle, not
-a remote `ca_connect()` client. `poll_milliseconds` sets the maintenance interval;
-`reap_limit` bounds the tasks changed by each poll, not the amount of table data
-DuckDB may scan. The native loop does not replace worker polling and does not
-renew a worker's lease, run a handler, enforce CPU/memory admission, or decide
-which downstream tasks are ready.
-
-`ca_coordinator_status()` reports state, poll/reaped/error counters, and the last
-error. Starting the loop is not proof that maintenance SQL succeeds; inspect
-those counters and errors. `ca_coordinator_stop()` joins the thread and releases
-its connection. `ca_close()` does this whenever the handle loaded the extension,
-and still does it if stopping the Quack endpoint fails. The instance is
-one-shot: after stop, use a fresh database instance to start another
-coordinator. The extension holds its connection from the moment it loads, so
-closing the DBI connection directly, bypassing `ca_close()`, keeps the database
-open and locked until the process exits.
-
-The extension is built separately against the stable DuckDB C extension API.
-Loading and starting it are explicit; opening an ordinary database does neither.
-No signed build is distributed. A local build loads only into a database opened
-with `allow_unsigned_extensions = TRUE`, a development-only setting that lets
-any SQL on that database load native code. The native path is experimental. See
-the [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
-for build and executable native integration tests.
-
-## A replaced claim cannot write
-
-Failure releases the original claim. A subsequent claim receives a new token;
-completion with the old token is rejected without changing the current task.
-
-These examples share a local database opened with `ca_open()`.
+A claim carries a lease token. Every write from a worker, whether a heartbeat,
+checkpoint, sleep, completion or failure, needs the current token and an
+unexpired lease. A worker that has lost its claim therefore cannot overwrite the
+task.
 
 ```{r fencing}
 id <- ca_spawn(db, "example", id = "lease-example")
@@ -140,69 +64,21 @@ outcome <- tryCatch({
   "accepted"
 }, canard_lease_lost = function(e) "rejected")
 ca_complete(current, "current")
-task <- ca_inspect(db, id)
-list(stale_completion = outcome, result = task$result)
+list(stale_completion = outcome, result = ca_result(db, id))
 ```
 
-Heartbeats, checkpoints, completion, failure, and suspension all require the
-current unexpired token. An expired lease cannot be revived by heartbeating.
-Cancellation also invalidates subsequent worker writes; it does not interrupt
-an external operation already in progress.
+An expired lease cannot be renewed, and cancellation invalidates the token.
+Neither stops code that is already running; `ca_process()` covers that below.
 
-## Checkpoints preserve native values
+## Failures and the retry budget
 
-Vectors, lists, data frames, dates, timestamps and other supported R values
-retain their declared mappings on execution and replay. A saved `NULL` is
-distinct from a missing checkpoint. See [Native values and DuckDB R compatibility](native-values.html)
-for the supported classes, precision limits and driver compatibility details.
+- `attempt` counts claims, including resumptions after a sleep.
+- `failures` counts handler failures and expired leases. When it reaches
+  `max_failures`, the task becomes `failed`.
+- An expired lease with budget left is reclaimed by the next worker that polls.
 
-```{r null-checkpoint}
-id <- ca_spawn(db, "example")
-first <- ca_claim(db)
-ca_step(first, "nullable", function() NULL)
-ca_fail(first, "retry")
-second <- ca_claim(db)
-value <- ca_step(second, "nullable", function() stop("must replay"))
-ca_complete(second, value)
-list(replayed_null = is.null(value), state = ca_inspect(db, id)$state)
-```
-
-Step names must be unique within an attempt. Include a stable index for loop
-steps. Treat step names and result shapes as persistent interfaces when deploying
-new handler code.
-
-## Query workflow state with SQL
-
-Task state, queue, attempts, failures, and timestamps are typed columns. Inputs
-and results are native VARIANT values with separate R type descriptors.
-Checkpoint names, kinds and native values are available through
-`canard_absurd.task_checkpoints`.
-
-```{r sql-inspection}
-DBI::dbGetQuery(db@con, "
-  SELECT state, count(*) AS tasks
-  FROM canard_absurd.tasks
-  GROUP BY state
-  ORDER BY state
-")
-DBI::dbGetQuery(db@con, "
-  SELECT name, kind, variant_typeof(value) AS value_type
-  FROM canard_absurd.task_checkpoints
-  WHERE task_id = ?
-", params = list(id))
-```
-
-These queries need no DuckDB extensions. Nested fields can be extracted and cast
-with native SQL. On affected engines, materialize whole values before indexed
-field extraction; the compatibility guide includes the query form and an
-executable explanation of the separate nested-NULL conversion issue.
-
-## Inspect an attempt's failure
-
-A handler failure and a task's terminal failure are different events. `ca_run()`
-returns both the attempt status and the persisted task state, along with the
-original R condition. Persistence errors and interrupts propagate instead of
-being recorded as handler failures.
+A handler error is recorded as a failure. `ca_run()` returns both the attempt's
+status and the task's new state:
 
 ```{r handler-failure}
 id <- ca_spawn(db, "example", max_failures = 1)
@@ -211,66 +87,28 @@ list(status = outcome$status, state = outcome$state,
      error = conditionMessage(outcome$error))
 ```
 
-If saving a handler failure also fails, `canard_failure_recording_error` retains
-the handler condition in `parent` and the storage condition in
-`persistence_error`. Error text is stored without truncation. Rich R conditions
-remain in attempt outcomes; the database stores their messages, not serialized R
-objects. See `?ca_conditions` for the condition fields and retry notifications.
+Storage errors, lost leases and interrupts propagate instead. They are not the
+handler's fault and do not use the budget. If recording a handler failure itself
+fails, `canard_failure_recording_error` keeps both conditions.
 
-## Error metadata compatibility
-
-Error preservation depends on the installed R driver and Quack build. Affected
-R wrappers discard the original condition's fields and cause chain; affected
-Quack bind paths turn the transported structured error into an
-`InvalidInputException`.
-
-The R wrapper report is [duckdb-r #2711](https://github.com/duckdb/duckdb-r/issues/2711).
-The fixes in [duckdb-r #2714](https://github.com/duckdb/duckdb-r/pull/2714) and
-[duckdb-quack #212](https://github.com/duckdb/duckdb-quack/pull/212) are merged.
-Their merge status alone does not establish that an installed driver/extension
-pair includes both fixes.
-
-CanardAbsurd first uses a structured DuckDB transaction error when available.
-Otherwise, one compatibility adapter recognizes exact tested write-conflict
-messages and duplicate-key messages containing the submitted task ID. It does
-not search arbitrary diagnostic text for conflict fragments. A
-`canard_conflict` or `canard_retryable` condition has `message_based = TRUE` when
-that adapter supplied the classification, and `FALSE` when structured metadata
-supplied it. Structured non-transaction types take precedence over the text.
-
-This is a workaround for released drivers, **not a stable error protocol**.
-Changed or unknown message forms propagate without a retry restart, as do
-transport failures. An unhandled recognized conflict also propagates: retry
-limits and delays still belong to the caller. Revalidate the DuckDB/Quack pair
-when upgrading; the integration suite uses installed packages and independent
-R processes. The package requires DuckDB R 1.5.5 or newer. Historical probes on
-1.5.3 explain the compatibility adapter, but that version is not a supported
-package runtime.
-
-## External effects still need idempotency
-
-A worker can call an external service, crash before saving the result, and repeat
-that call on recovery. Checkpointing does not make an HTTP request transactional
-with DuckDB. Use a stable business-level idempotency key for payments, messages,
-and other mutations. Deduplicating task submission does not deduplicate those
-external effects.
+Write conflicts are routine when workers compete for the same task. DuckDB
+aborts the losing statement, so repeating it is safe: `ca_work()` retries it up
+to `conflict_retries` times (8 by default) with jittered backoff, without
+rerunning any R code. Outside a worker, handle `canard_retryable` and invoke the
+`canard_retry` restart yourself. Network errors are never retried, because the
+statement may already have committed. See `?ca_conditions`.
 
 ## Supervise work longer than a lease
 
-Calls to `ca_step()`, `ca_sleep()` and `ca_heartbeat()` renew a lease, but no
-background R thread renews it while a callback blocks. A step that blocks in
-`system2()` longer than its lease lets another worker reclaim the task and start
-the same work again. The database still rejects the old worker's writes, but not
-its files.
+Only `ca_step()`, `ca_sleep()` and `ca_heartbeat()` renew a lease. A step that
+blocks in `system2()` for longer than the lease lets another worker reclaim the
+task and start the same work again.
 
-`ca_process()` runs the command in its own process and renews the lease from
-the worker while it runs. It checks the lease before starting, writes logs to
-`stdout.log` and `stderr.log`, and gives each attempt its own `attempt-<n>`
-directory, so an obsolete attempt cannot overwrite accepted files. Lease loss,
-including cancellation, a timeout, or an error in the supervising R code kills
-the command's process tree. Returning its paths from a `ca_step()` callback
-publishes them only while the lease is held. For blocking R or native
-computation, run an `Rscript` the same way.
+`ca_process()` runs the command in a child process and keeps the lease alive
+from the worker. Each attempt gets its own directory, with `stdout.log` and
+`stderr.log`, so an abandoned attempt cannot overwrite accepted output. The
+command is killed on lease loss, cancellation or timeout. Return output paths
+from a `ca_step()` so that only the current lease holder publishes them.
 
 ```{r process}
 rscript <- file.path(R.home("bin"),
@@ -292,41 +130,91 @@ list(state = task$state, attempts = task$attempt,
      output = basename(dirname(ca_result(db, id))))
 ```
 
-The command ran three times longer than the half-second lease without a
-reclaim. Supervision cannot rule out every physical overlap: a paused or
-partitioned worker can outlive its lease before its next heartbeat. For Slurm
-or another scheduler, use that backend's own submission, discovery and
-cancellation identities; supervising a submit command does not supervise the
-remote job.
+The command ran three times longer than the lease without being reclaimed. For
+Slurm or another scheduler, track the scheduler's own job ID: supervising
+`sbatch` does not supervise the job.
 
-## Operational limits
+## Checkpoints keep R values
 
-- Checkpoints share the task row so lease changes and checkpoint writes contend
-  on the same durable record. This keeps lease ownership and checkpoint storage
-  in one update; it is not a throughput guarantee.
-- Inputs, results, checkpoints and error text have no package-imposed byte quota.
-  Large values still consume engine memory, disk and transport capacity.
-  Values travel as SQL literals, and each new checkpoint rewrites the task's
-  checkpoint map, so cost grows with the number and size of saved steps. Store
-  file references rather than bulk data, and measure a workload with
-  [`tools/benchmark.R`](https://github.com/RGenomicsETL/CanardAbsurd/blob/main/tools/benchmark.R)
-  before relying on many large checkpoints.
-- `ca_tasks()` lists metadata without reading payloads; use it to poll many
-  tasks. `ca_inspect()` reads every value of one task.
-- Claims and checkpoint replay use a fenced typed read after their lease UPDATE.
-  A failure of that read does not undo the UPDATE or cause a handler to run.
-  See the compatibility guide for the additional round trip and recovery rules.
-- Schema version 1 bounds task IDs and handler names to 256 characters, queue
-  names to 128 characters, and failure budgets to 1 through 1,000,000. Changing
-  those persisted constraints requires a schema change, not a client option.
-- Task IDs remain deduplicated while their rows are retained. Retention and
-  database growth are operator responsibilities.
-- Schema version 1 is checked at open/connect time. Events, cron, automatic
-  retention, history tables, and schema migrations are outside this release.
-- Quack is experimental. Record `ca_runtime()` when validating a deployment;
-  compatibility depends on the DuckDB and Quack versions in deployment.
+A saved `NULL` is a value, distinct from a missing checkpoint:
 
-## Close the example database
+```{r null-checkpoint}
+id <- ca_spawn(db, "example")
+first <- ca_claim(db)
+ca_step(first, "nullable", function() NULL)
+ca_fail(first, "retry")
+second <- ca_claim(db)
+value <- ca_step(second, "nullable", function() stop("must replay"))
+ca_complete(second, value)
+list(replayed_null = is.null(value), state = ca_inspect(db, id)$state)
+```
+
+Step names must be unique within an attempt and stable across deployments; give
+loop iterations an index. [Native values](native-values.html) lists the type
+mappings.
+
+## Query state with SQL
+
+Tasks live in `canard_absurd.tasks`, and the `canard_absurd.task_checkpoints`
+view lists their checkpoints.
+
+```{r sql-inspection}
+DBI::dbGetQuery(db@con, "
+  SELECT state, count(*) AS tasks
+  FROM canard_absurd.tasks
+  GROUP BY state
+  ORDER BY state
+")
+DBI::dbGetQuery(db@con, "
+  SELECT name, kind, variant_typeof(value) AS value_type
+  FROM canard_absurd.task_checkpoints
+  WHERE task_id = ?
+", params = list(id))
+```
+
+## Abandoned tasks and native maintenance
+
+When a worker dies during a task's last allowed attempt, the task must still be
+marked `failed`. Workers do this for their own queue each time they poll, up to
+`reap_limit` tasks at a time.
+
+For queues that no worker polls, the optional `canard_coordinator` extension
+does the same across all queues from a native thread in the database owner.
+Start it with `ca_coordinator_start()` on the owner handle, check it with
+`ca_coordinator_status()`, and stop it with `ca_coordinator_stop()` or
+`ca_close()`. Close with `ca_close()`: the extension's connection otherwise
+keeps the database locked until the process exits.
+
+The extension is experimental and can start only once per database instance.
+No signed build is distributed, so a local build loads only with
+`ca_open(allow_unsigned_extensions = TRUE)`, a development setting that lets any
+SQL load native code. See the
+[build instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator).
+
+## Error classification
+
+Released DuckDB R and Quack builds lose the structured type of some errors
+([duckdb-r #2711](https://github.com/duckdb/duckdb-r/issues/2711),
+[duckdb-quack #212](https://github.com/duckdb/duckdb-quack/pull/212)). Until the
+installed versions carry both fixes, CanardAbsurd recognizes write conflicts by
+their exact, tested message text and sets `message_based = TRUE` when it does.
+Unknown messages are never treated as retryable. Recheck this when you upgrade
+DuckDB or Quack.
+
+## Limits
+
+- Checkpoints live in the task row, and every new step rewrites that task's
+  checkpoint map, so many large checkpoints get slow. Save file references
+  rather than bulk data, and measure your workload with
+  [`tools/benchmark.R`](https://github.com/RGenomicsETL/CanardAbsurd/blob/main/tools/benchmark.R).
+- Values travel as SQL text. There is no byte quota, but engine memory and
+  transport limits apply.
+- Task IDs and handler names are at most 256 characters and queue names at most
+  128; `max_failures` ranges from 1 to 1,000,000.
+- Task IDs stay deduplicated for as long as their rows are kept. Retention is up
+  to you.
+- There are no events, cron schedules, history tables or schema migrations yet.
+- Quack is experimental. Record `ca_runtime()` when you validate a deployment.
 
 ```{r close}
 ca_close(db)

@@ -44,9 +44,8 @@ values <- list(
 )
 
 # Indexed native values survive checkpointing and a file reopen. Skipped on
-# Windows: duckdb-r's RApiTypes::ValueToSexp() leaves its VARIANT destination
-# unprotected across R allocations, and Windows CI reliably returns corrupted
-# descriptors here. Linux hits the same defect only occasionally.
+# Windows, where CI reliably hits duckdb-r's unprotected VARIANT conversion
+# (duckdb/duckdb-r#2750); Linux hits it only occasionally.
 if (.Platform$OS.type != "windows") local({
   path <- tempfile(fileext = ".duckdb")
   withr::defer(unlink(c(path, paste0(path, ".wal"))))

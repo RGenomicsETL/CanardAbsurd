@@ -7,36 +7,25 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-Quack is required for a shared workflow database. One server process owns the
-writable DuckDB file; producers and workers use their own
-in-memory DuckDB connections to send SQL through Quack. They must not open the
-server's database file directly: multi-process file access causes DuckDB/WAL
-contention and locking errors. R handlers execute in those clients, never in a
-server callback.
-
-This article starts a temporary server and executes a worker over Quack. It
-puts both handles in one R process so the evaluated guide does not need to start
-a separate shell process; the connections still communicate through a Quack
-endpoint. Production deployment separates the server and
-workers as described below. This network-dependent article is built by pkgdown,
-while the package vignettes run offline.
+To share a workflow database, one process owns the DuckDB file and serves it
+with `ca_serve()`. Producers and workers connect over Quack with
+`ca_connect()`. They must never open the file themselves, because DuckDB allows
+only one writing process. Handlers run in the workers, never in the server.
 
 ```mermaid
 flowchart LR
-  Producer["API / producer"] -->|"ca_connect()"| Quack
+  Producer["API or producer"] -->|"ca_connect()"| Quack
   Worker["R worker<br/>ca_work()"] -->|"ca_connect()"| Quack
-  subgraph Owner["one database-owner process"]
+  subgraph Owner["database owner"]
     Quack["Quack listener<br/>ca_serve()"] --> Database[("DuckDB file")]
-    Maintenance["optional native<br/>lease maintenance"] --> Database
   end
 ```
 
-## Install the runtime
+## Install Quack
 
-Install DuckDB's Quack extension explicitly before serving or connecting, and
-its `httpfs` dependency, which Quack clients load. From a source checkout,
-`make quack` performs this setup. In another R environment, run this once with
-network access:
+Connections never download extensions, so install Quack, and the `httpfs`
+extension its clients load, once with network access. From a source checkout,
+`make quack` does this. Elsewhere, run:
 
 ```r
 dir.create(path.expand("~/.duckdb"), recursive = TRUE, showWarnings = FALSE)
@@ -48,33 +37,13 @@ local({
 })
 ```
 
-The extensions are stored in DuckDB's shared extension directory so later R
-processes using the same DuckDB runtime can load them. Package loading and
-connections never download extensions.
+Both are stored in DuckDB's shared extension directory, where later R processes
+using the same DuckDB version find them.
 
-## Optional maintenance belongs on the owner
+## Serve and work
 
-The `canard_coordinator` extension is separate from Quack. If it is available in
-the deployment, start it explicitly with `ca_coordinator_start()` on the owner
-handle returned by `ca_serve()`. A `ca_connect()` client is not its lifecycle
-owner. The ordinary server/worker path below does not require the extension.
-
-The native loop marks expired, exhausted attempts failed across all queues, even
-when no worker is polling them. It neither runs R handlers nor monitors external
-tools or downstream dependencies. Inspect progress and errors with
-`ca_coordinator_status()`. Stop it before database teardown;
-`ca_close()` does so for a coordinator started through that handle. Stopping is
-one-shot: a fresh database instance is required to start another loop.
-
-See [durability and recovery](durability.html#native-lease-maintenance) for the
-maintenance contract and [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
-for building and signing. Installing Quack does not install this extension.
-
-## Run the server/client path
-
-The demonstration uses a disposable localhost token. Use a securely supplied
-nonempty token and a controlled network address for a deployment. Here `path`
-is a temporary database file and `uri` is an available localhost endpoint.
+This example keeps the server and the worker in one R process so it can run as
+a single document. They still talk to each other through a real Quack endpoint.
 
 ```{r server}
 library(CanardAbsurd)
@@ -97,64 +66,37 @@ sum_values <- function(input, ctx) {
 id <- ca_spawn(worker, "sum", list(values = list(10, 20, 12)),
                id = "remote-sum-001", queue = "reports")
 ca_work(worker, list(sum = sum_values), queue = "reports", max_tasks = 1)
-task <- ca_inspect(worker, id)
-list(runtime = ca_runtime(worker), state = task$state, result = task$result)
+list(runtime = ca_runtime(worker), result = ca_result(worker, id))
 ```
-
-These are independent database connections in one R process, communicating
-through a Quack endpoint. The `tinytest` suite also executes workers in
-independent R processes and kills worker and database-host processes to test
-recovery.
-
-## Deploy across processes
-
-Use the same `ca_serve()` call in a long-lived server R process, with a persistent
-database path. It is the only process that opens that file and it must remain
-alive to serve requests. Every producer and worker calls `ca_connect()` with the
-endpoint and token; workers register their handler lists and enter `ca_work()`.
-
-Each worker executes one attempt at a time. `lease_seconds` must cover the time
-between named checkpoint calls or explicit heartbeats. `poll_seconds` controls idle
-polling, and `idle_timeout` controls when an idle worker returns. A worker that
-only knows one handler will not claim other task names.
-
-Workers that poll together select the same eligible row, and DuckDB aborts the
-losing statement with a write conflict. `ca_work()` repeats such a statement up
-to `conflict_retries` times (8 by default) with jittered backoff; the retry
-repeats only that SQL statement, not the R handler or its external effects, and
-does not consume the task's failure budget. Set `conflict_retries = 0` to supply
-your own `canard_retryable` policy, as producers calling `ca_spawn()` directly
-must. Storage errors include the operation, total attempts,
-elapsed seconds, and the original DBI condition. Transport failures propagate
-even when raised by a step inside a handler and offer no retry restart.
-Released drivers require a message-based compatibility adapter for conflict
-classification. The condition's `message_based` field discloses that path; see
-[error metadata compatibility](durability.html#error-metadata-compatibility)
-for its limits and the upstream reports.
-
-## Inspect and stop
-
-`ca_inspect()` reports state, attempts, failures, available time, owner, and lease
-deadline. `ca_runtime()` reports the executing server's versions. `ca_close()`
-closes a client; closing the server handle stops its endpoint and closes the file.
 
 ```{r close}
 ca_close(worker)
 ca_close(server)
 ```
 
-Keep handles process-local. Give package operations their dedicated connections
-rather than wrapping them in externally managed transactions.
+## Deploy
+
+- Run `ca_serve()` in a long-lived process with a persistent path. It must stay
+  up for the others to work.
+- Start as many workers as you have capacity for. Each calls `ca_connect()`,
+  then `ca_work()` with its handlers, and runs one attempt at a time.
+- Set `lease_seconds` longer than the gap between checkpoints, or supervise
+  long commands with `ca_process()`.
+- Competing workers retry write conflicts on their own. Producers calling
+  `ca_spawn()` outside a worker should handle `canard_retryable`; see
+  `?ca_conditions`.
+- Keep handles in the process that created them, and do not wrap package calls
+  in your own transactions.
+- For maintenance of abandoned tasks across all queues, start the optional
+  native coordinator on the server handle; see
+  [Durability and recovery](durability.html#abandoned-tasks-and-native-maintenance).
 
 ## Protect the endpoint
 
-The token grants arbitrary SQL, not access to particular task operations. SQL
-can read and write files and load extensions with the server process's
-operating-system privileges, and a token holder can rewrite any task row without
-a lease. Treat every token holder as trusted: the lease protocol fences workers
-that follow it, not adversarial ones. A trusted application service can hold the
-token and translate authorized requests into fixed operations; browsers and
-untrusted computation must never receive it or choose the SQL. Use network
-restrictions and TLS at authenticated ingress for non-local deployments. Do not
-expose an unprotected Quack server to the internet. Package loading and
-connections never install extensions; extension acquisition is explicit setup.
+The token grants arbitrary SQL, not a set of task operations. Its holder can
+read and write files and load extensions with the server's operating-system
+privileges, and can rewrite any task without a lease. Give it only to trusted
+workers and services. A trusted application service can hold it and expose
+fixed operations to everyone else; browsers and untrusted code must never see
+it. Put non-local servers behind authenticated, TLS-terminating ingress, and
+never expose Quack directly to the internet.

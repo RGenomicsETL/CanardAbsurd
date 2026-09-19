@@ -10,46 +10,14 @@ output: github_document
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
 [![R-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
 
-CanardAbsurd keeps costly R work alive after the process that requested it has
-returned. An application or API submits a request, a worker pulls it when
-capacity is available, and named completed stages are replayed when a later
-worker resumes the work.
+CanardAbsurd runs expensive R work that must outlive the request that started
+it. Submit a task, let any worker pick it up, and if that worker dies, the next
+one resumes from the last saved step instead of starting over.
 
-It adapts the checkpoint-and-replay execution model from
-[Absurd](https://github.com/earendil-works/absurd) to R, DuckDB, and Quack.
-The R API, SQL state machine, storage layout, and transport are independent.
-
-## Is this the right tool?
-
-Use CanardAbsurd when an input should start expensive work that may outlive its
-request process: an upload, a refresh, a report request, or an API call. It is
-useful when a replacement worker should continue from saved stages instead of
-starting the whole handler again.
-
-It is not a dependency-graph scheduler, an artifact store, a notification
-service, or an exactly-once external-effect system. The application decides
-when work is requested and what its result means. `targets` can decide graph
-expansion, cache validity, and invalidation; CanardAbsurd can run durable
-requests that a controller submits.
-
-## The mental model
-
-```mermaid
-flowchart TB
-  Request["detected input or API request"] -->|"ca_spawn()"| Task
-  Workflow["workflow<br/>named R handler and its steps"] -->|"one workflow → many tasks"| Task
-  Task["task<br/>one durable workflow request"] -->|"one task → many named steps"| Step
-  Worker["R worker"] -->|"claims an attempt and lease"| Task
-  Step["step<br/>one named stage"] -->|"saves or replays"| State
-  Task -->|"state · input · result · lease"| State
-  State[("DuckDB workflow database")]
-```
-
-A workflow is worker code: a named R handler and its `ca_step()` calls. Each
-request creates one durable task for that workflow. A task records values for
-its named steps in DuckDB; a later attempt replays a saved step instead of
-rerunning its callback. DuckDB holds the task state, lease, result, and saved
-step values. Terminal tasks are `completed`, `failed`, or `cancelled`.
+It brings the checkpoint-and-replay model of
+[Absurd](https://github.com/earendil-works/absurd) to R, with DuckDB holding the
+state and [Quack](https://github.com/duckdb/duckdb-quack) giving other processes
+access to it.
 
 ## Install
 
@@ -57,19 +25,10 @@ step values. Terminal tasks are `completed`, `failed`, or `cancelled`.
 install.packages("CanardAbsurd", repos = "https://rgenomicsetl.r-universe.dev")
 ```
 
-For one R process, use `ca_open()`. For a database shared by producers and
-workers, explicitly install the matching Quack extension and run one
-long-lived `ca_serve()` process. The [Quack server guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html)
-shows the setup.
-
-## Run a small workflow
-
-This local example has one request, two durable stages, and one worker. It is a
-good way to learn the handler contract; it is not a shared deployment.
+## Example
 
 ```{r small-workflow}
 library(CanardAbsurd)
-
 db <- ca_open()
 
 total <- function(input, task) {
@@ -77,113 +36,57 @@ total <- function(input, task) {
   ca_step(task, "total", function() subtotal * (1 + input$tax))
 }
 
-id <- ca_spawn(
-  db,
-  "total",
-  list(amounts = c(20, 10), tax = 0.2),
-  id = "invoice-42"
-)
+id <- ca_spawn(db, "total", list(amounts = c(20, 10), tax = 0.2), id = "invoice-42")
 ca_work(db, list(total = total), max_tasks = 1)
-
-task <- ca_inspect(db, id)
-list(state = task$state, attempts = task$attempt,
-     checkpoints = names(task$checkpoints), result = task$result)
-
+ca_result(db, id)
 ca_close(db)
 ```
 
-If the worker fails after saving `subtotal`, another attempt calls the same
-handler and `ca_step(task, "subtotal", ...)` returns the saved value without
-running that callback again. A step callback that finishes but fails before its
-value is saved can run again.
+A **task** is one durable request. Its **handler** is the R function that runs
+it, and each `ca_step()` is a named **checkpoint**. If a worker dies after
+`subtotal` is saved, the next attempt replays `subtotal` and computes only
+`total`.
 
-## Choose where the database lives
+## How it fits together
 
 ```mermaid
 flowchart LR
-  subgraph Local["one R process"]
-    LocalR["your R process"] -->|"ca_open()"| LocalDB[("DuckDB")]
-  end
-  subgraph Shared["separate producer and worker processes"]
-    Producer["producer"] -->|"ca_connect() over Quack"| Server
-    Worker["worker"] -->|"ca_connect() over Quack"| Server
-    subgraph Owner["database-owner process"]
-      Server["Quack server<br/>ca_serve()"] --> SharedDB[("DuckDB file")]
-      Maintenance["optional native<br/>lease maintenance"] --> SharedDB
-    end
+  Producer["API or producer"] -->|"ca_spawn()"| Server
+  Worker1["R worker"] -->|"ca_work()"| Server
+  Worker2["R worker"] -->|"ca_work()"| Server
+  subgraph Owner["database owner"]
+    Server["Quack server<br/>ca_serve()"] --> DB[("DuckDB file")]
   end
 ```
 
-Use `ca_open()` when one R process does everything. Otherwise, the server alone
-opens the DuckDB file; producers and workers connect through Quack. Handlers run
-in workers, not in the server.
+- One process owns the DuckDB file with `ca_serve()`. Producers and workers
+  reach it over Quack with `ca_connect()`. A single R process can use
+  `ca_open()` instead.
+- Workers claim tasks under a lease. A worker that loses its lease can no longer
+  write, and another worker takes over.
+- Handlers run in workers, never in the server.
 
-## Optional native lease maintenance
+## Guarantees
 
-If a worker disappears on its last allowed attempt, its task must eventually be
-marked failed. Workers perform this cleanup when they poll a queue. The optional
-`canard_coordinator` extension performs the same cleanup across all queues,
-including queues with no active workers.
+- **At least once.** A step whose callback finished but whose result was not yet
+  saved runs again. Give external side effects, such as payments, emails and
+  uploads, an idempotency key.
+- **Leases fence the database, not the world.** A stale worker cannot write task
+  state but may still be running. `ca_process()` supervises long external
+  commands: it keeps the lease alive while they run and kills them when the
+  lease is lost.
+- **Not a scheduler.** There is no dependency graph or artifact store. Your
+  application or `targets` decides what to run; CanardAbsurd makes each
+  submitted run survive crashes.
 
-It runs a service thread and dedicated connection in the database-owner process.
-It does **not** execute handlers, renew worker leases, check dependencies, or
-launch downstream jobs. Workers still claim and run tasks through `ca_work()`.
+Inputs, results and checkpoints are native DuckDB values you can query in SQL:
+vectors, lists, data frames, dates, timestamps, factors, raw vectors and
+`integer64`. Serialize anything else to a raw vector yourself.
 
-Start it explicitly with `ca_coordinator_start()`, inspect progress and errors
-with `ca_coordinator_status()`, and stop it with `ca_coordinator_stop()`.
-`ca_close()` stops a coordinator started through that handle. A stopped instance
-cannot restart; start a fresh database instance instead. The extension is built
-separately; package loading does not install or start it.
+## Guides
 
-See [lease maintenance and recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html#native-lease-maintenance)
-and the [extension build instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator).
-
-## Where repeat work can happen
-
-```mermaid
-flowchart LR
-  Step["step callback"] --> Effect["file · API · tool"]
-  Effect --> Save["save checkpoint"]
-  Effect -. "worker exits before save" .-> Retry["later attempt"]
-  Retry --> Effect
-```
-
-The checkpoint does not make an external action transactional. Use an
-idempotency key where that external system enforces one. A lease rejects stale
-writes; it does not stop a process already running. Run long external commands
-with `ca_process()`, which renews the lease while they run and kills them when
-the lease is lost.
-
-## Use it with `targets`
-
-```mermaid
-flowchart LR
-  Target["targets<br/>plan graph · cache · invalidate"]
-  Task["CanardAbsurd task<br/>state · lease · saved steps"]
-  Worker["independent worker"]
-  Target -->|"submit an explicit request"| Task
-  Task -->|"claim"| Worker
-  Worker -->|"checkpoint or complete"| Task
-  Task -->|"inspect terminal task"| Target
-```
-
-`targets` decides whether graph work should run; CanardAbsurd executes the
-request that a controller submits. Use an ID for the requested execution, not
-only its input value: unchanged inputs can still need another run. There is no
-`targets` backend in this package.
-
-## Values and next steps
-
-Inputs, results, and checkpoints use native DuckDB values with R type
-descriptors. Supported vectors, lists, data frames, dates, timestamps, factors,
-raw vectors, and `integer64` values round trip with their documented mappings.
-For other R objects, serialize explicitly to a raw vector and store it as a
-BLOB; CanardAbsurd never selects a serializer automatically.
-
-Read the guide that matches the next question:
-
-- [Getting started](https://rgenomicsetl.github.io/CanardAbsurd/articles/getting-started.html): handler, attempt, step, and worker behavior.
-- [A Quack server and R workers](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html): one writable DuckDB owner and separate processes.
-- [Durability and recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html): leases, retries, failures, sleeps, cancellation, and external effects.
-- [Native values and DuckDB R compatibility](https://rgenomicsetl.github.io/CanardAbsurd/articles/native-values.html): mappings and driver limitations.
-- [Serialized R values](https://rgenomicsetl.github.io/CanardAbsurd/articles/serialized-values.html): explicit base R, qs2, and Sakura BLOB workflows.
+- [Getting started](https://rgenomicsetl.github.io/CanardAbsurd/articles/getting-started.html): handlers, steps, retries and sleeps.
+- [A Quack server and R workers](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html): deploying across processes.
+- [Durability and recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html): leases, failures, long jobs and native maintenance.
+- [Native values](https://rgenomicsetl.github.io/CanardAbsurd/articles/native-values.html): type mappings and DuckDB driver caveats.
+- [Serialized R objects](https://rgenomicsetl.github.io/CanardAbsurd/articles/serialized-values.html): base R, qs2 and Sakura.

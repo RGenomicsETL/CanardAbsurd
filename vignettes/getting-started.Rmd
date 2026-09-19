@@ -12,44 +12,20 @@ knitr::opts_chunk$set(eval = TRUE, cache = FALSE, collapse = TRUE,
                     comment = "#>", error = FALSE, message = FALSE)
 ```
 
-A workflow is worker code: a named R handler and its named `ca_step()` calls.
-One workflow can have many durable task requests. Each task can have many saved
-step values.
+A handler is an R function of `(input, ctx)`. Wrap each expensive stage in
+`ca_step(ctx, "name", fn)`: its result is saved, and a later attempt replays it
+instead of calling `fn` again.
 
-## The concepts
-
-```mermaid
-flowchart TB
-  Request["detected input or API request"] -->|"ca_spawn()"| Task
-  Workflow["workflow<br/>named R handler and its steps"] -->|"one workflow → many tasks"| Task
-  Task["task<br/>one durable workflow request"] -->|"one task → many named steps"| Step
-  Worker["R worker"] -->|"claims an attempt and lease"| Task
-  Step["step<br/>one named stage"] -->|"saves or replays"| State
-  Task -->|"state · input · result · lease"| State
-  State[("DuckDB workflow database")]
-```
-
-The workflow code stays in a worker process; DuckDB stores task state, leases,
-results, and saved step values. A later attempt replays a saved step instead of
-rerunning its callback. A stale or cancelled worker cannot write.
-
-`ca_spawn()` creates a task. `ca_work()` claims tasks for the handler names it
-knows, executes attempts, and reports their outcomes. `ca_inspect()` reads the
-current task record.
-
-This guide uses an in-memory database to introduce that lifecycle without
-network access or a Quack installation. It is a one-process example: no other
-R process accesses this database. For a shared workflow database, Quack is
-mandatory: one server process owns the writable DuckDB file, and producers and
-workers use `ca_connect()` rather than opening that file.
-
-## Submit, work, and inspect one task
+This guide uses an in-memory database inside one R process. To run workers in
+separate processes, see [A Quack server and R workers](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html).
 
 ```{r open}
 library(CanardAbsurd)
 db <- ca_open()
 withr::defer(ca_close(db))
 ```
+
+## Run a task
 
 ```{r first-task}
 total <- function(input, ctx) {
@@ -58,19 +34,18 @@ total <- function(input, ctx) {
 
 id <- ca_spawn(db, "total", list(amount = 20, tax = 2), id = "order-001")
 ca_work(db, list(total = total), max_tasks = 1)
-task <- ca_inspect(db, id)
-list(state = task$state, result = task$result)
+ca_result(db, id)
 ```
 
-The stable ID also makes submission idempotent: submitting the same name, input,
-queue, priority, and failure budget under that ID returns the existing task.
-Different input under that ID raises `canard_spawn_conflict`. Input equality
-includes the R mapping, names, and their order.
+The ID makes submission idempotent. Resubmitting the same request returns the
+existing task, and a different request under that ID raises
+`canard_spawn_conflict`. Choose your own IDs so a lost response can be retried
+safely.
 
 ## Resume after a failure
 
-The first step below completes once. The second step fails on its first call,
-so the worker retries the handler. The saved first step is replayed.
+`deliver` fails on its first call. The worker records the failure, retries the
+task, and replays `prepare` from its checkpoint.
 
 ```{r replay}
 calls <- c(prepare = 0L, deliver = 0L)
@@ -99,16 +74,15 @@ data.frame(state = task$state, attempts = task$attempt,
            deliver_calls = calls[["deliver"]], result = task$result)
 ```
 
-`on_result` receives every persisted attempt outcome, including the original
-handler condition on failure. Without a callback, the worker warns on failures.
-`failure_delay` controls when a failed task becomes eligible again; its default
-is zero. The local counters expose which callbacks ran; they are not durable
-workflow state. Durable results live in the database.
+`prepare` ran once and `deliver` twice. `on_result` receives each attempt's
+outcome; without it, the worker warns when a handler fails. `max_failures`
+(3 by default) bounds retries, and `failure_delay` spaces them out.
 
-## Release a task until later
+## Sleep durably
 
-`ca_sleep()` saves its checkpoint and releases the claim. The resumed handler
-passes that named sleep without scheduling it again.
+`ca_sleep()` saves a checkpoint and releases the task until the delay has passed
+on the database clock. On resumption the sleep is skipped. Sleeping does not use
+the failure budget.
 
 ```{r sleep}
 pause <- function(input, ctx) {
@@ -121,58 +95,39 @@ task <- ca_inspect(db, id)
 list(result = task$result, attempts = task$attempt, failures = task$failures)
 ```
 
-A zero-second sleep demonstrates the state transition without delaying the
-render. Positive durations use the database clock. Sleeps do not consume the
-failure budget.
+## Watch tasks
 
-## Watch tasks without loading their values
-
-`ca_tasks()` lists state, attempts, failures and timestamps for many tasks in
-one query, without reading inputs, results or checkpoints. `ca_result()` reads
-one completed task's result. `ca_inspect()` reads everything for one task.
+`ca_tasks()` lists the status of many tasks without loading their data.
+`ca_inspect()` returns everything about one task, including its checkpoints.
 
 ```{r watch}
 ca_tasks(db, state = "completed")[, c("id", "name", "attempt", "failures")]
-ca_result(db, "replay-001")
+names(ca_inspect(db, "replay-001")$checkpoints)
 ```
 
-## Several samples, then a cohort
+## Samples, then a cohort
 
-For genomics work, one sample task could have named steps for alignment and gVCF
-calling. Two samples are two tasks that separate workers can run concurrently.
-Joint genotyping is another task, submitted when the required sample outputs are
-ready.
+Make one task per sample, with alignment and gVCF calling as its steps, and
+separate workers process samples in parallel. Joint genotyping is another task,
+which your application or `targets` submits once every sample task has
+completed. CanardAbsurd has no dependency API: tasks record where outputs are,
+and workers need access to those files.
 
 ```mermaid
 flowchart LR
-  Sample1["sample-101 task<br/>align → call gVCF"] --> Saved1[("DuckDB<br/>sample-101 completed<br/>gVCF location")]
-  Sample2["sample-102 task<br/>align → call gVCF"] --> Saved2[("DuckDB<br/>sample-102 completed<br/>gVCF location")]
-  Saved1 --> Controller["application or targets<br/>checks cohort readiness"]
-  Saved2 --> Controller
-  Controller --> Joint["submit joint genotyping task"]
+  Sample1["sample-101<br/>align → call gVCF"] --> Controller["application or targets"]
+  Sample2["sample-102<br/>align → call gVCF"] --> Controller
+  Controller -->|"both completed"| Joint["joint genotyping task"]
 ```
 
-These arrows describe application orchestration, not a dependency API supplied
-by CanardAbsurd. Sequential `ca_step()` calls inside one sample handler are not
-independently scheduled jobs. A stored gVCF path also does not store the file:
-workers need access to the outputs and compatible execution environments.
+## Worker lifetime
 
-The optional native coordinator handles expired final attempts. It does not
-supply the cohort-readiness check in this diagram. See
-[native lease maintenance](durability.html#native-lease-maintenance).
+- `max_tasks = 1` runs one attempt.
+- `idle_timeout = 0` drains the eligible work and returns.
+- By default a worker polls until it is interrupted.
 
-## Choose a worker lifetime
-
-- `max_tasks = 1` executes one claimed attempt, including a failure or suspension.
-- `idle_timeout = 0` drains work that is currently eligible.
-- The defaults keep polling until the worker is interrupted.
-
-Each worker runs one attempt at a time. For concurrency, run independent R
-processes connected to a Quack server. Only names present in `handlers` are
-claimed. See the [Quack server guide](https://rgenomicsetl.github.io/CanardAbsurd/articles/quack-server.html).
-
-Close the one-process connection when finished. The deferred cleanup also
-closes it if a later example errors.
+A worker runs one attempt at a time and claims only tasks whose names appear in
+`handlers`. To scale out, run more worker processes connected through Quack.
 
 ```{r close}
 ca_close(db)
