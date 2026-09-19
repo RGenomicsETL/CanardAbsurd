@@ -43,8 +43,11 @@ values <- list(
     data.frame(x = 1L), data.frame(x = 1L, row.names = "custom"))
 )
 
-# Indexed native values survive checkpointing and a file reopen.
-local({
+# Indexed native values survive checkpointing and a file reopen. Skipped on
+# Windows: duckdb-r's RApiTypes::ValueToSexp() leaves its VARIANT destination
+# unprotected across R allocations, and Windows CI reliably returns corrupted
+# descriptors here. Linux hits the same defect only occasionally.
+if (.Platform$OS.type != "windows") local({
   path <- tempfile(fileext = ".duckdb")
   withr::defer(unlink(c(path, paste0(path, ".wal"))))
   db <- local_database(path)
