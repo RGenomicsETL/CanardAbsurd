@@ -105,9 +105,12 @@ flowchart LR
     LocalR["your R process"] -->|"ca_open()"| LocalDB[("DuckDB")]
   end
   subgraph Shared["separate producer and worker processes"]
-    Producer["producer"] -->|"ca_connect() over Quack"| Server["server<br/>ca_serve()"]
+    Producer["producer"] -->|"ca_connect() over Quack"| Server
     Worker["worker"] -->|"ca_connect() over Quack"| Server
-    Server -->|"only file owner"| SharedDB[("DuckDB file")]
+    subgraph Owner["database-owner process"]
+      Server["Quack server<br/>ca_serve()"] --> SharedDB[("DuckDB file")]
+      Maintenance["optional native<br/>lease maintenance"] --> SharedDB
+    end
   end
 ```
 
@@ -117,19 +120,23 @@ in workers, not in the server.
 
 ## Optional native lease maintenance
 
-The optional `canard_coordinator` extension runs bounded expired-lease
-maintenance in the database-owner process, independently of worker claims. It
-targets stable DuckDB C API v1.2 and uses a dedicated connection with pending
-query execution. `ca_coordinator_start()` starts the loop,
-`ca_coordinator_status()` reports its state and counters, and
-`ca_coordinator_stop()` joins the native thread and releases its connection.
-`ca_close()` performs that shutdown automatically.
+If a worker disappears on its last allowed attempt, its task must eventually be
+marked failed. Workers perform this cleanup when they poll a queue. The optional
+`canard_coordinator` extension performs the same cleanup across all queues,
+including queues with no active workers.
 
-The v1 coordinator is one-shot for each database handle: it cannot restart after
-its dedicated connection closes. It does not supervise external jobs, reserve
-CPU or memory, or publish artifacts. See the
-[native extension instructions](tools/canard-coordinator/README.md) for the
-build, signing, and lifecycle contract.
+It runs a service thread and dedicated connection in the database-owner process.
+It does **not** execute handlers, renew worker leases, check dependencies, or
+launch downstream jobs. Workers still claim and run tasks through `ca_work()`.
+
+Start it explicitly with `ca_coordinator_start()`, inspect progress and errors
+with `ca_coordinator_status()`, and stop it with `ca_coordinator_stop()`.
+`ca_close()` stops a coordinator started through that handle. A stopped instance
+cannot restart; start a fresh database instance instead. The extension is built
+separately; package loading does not install or start it.
+
+See [lease maintenance and recovery](https://rgenomicsetl.github.io/CanardAbsurd/articles/durability.html#native-lease-maintenance)
+and the [extension build instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator).
 
 ## Where repeat work can happen
 

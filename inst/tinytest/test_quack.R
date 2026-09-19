@@ -152,7 +152,10 @@ local({
     task <- ca_claim(db, lease_seconds = 0.5)
     file.create(file.path(directory, "old-claim"))
     while (!file.exists(file.path(directory, "release"))) Sys.sleep(0.01)
-    tryCatch({ ca_complete(task, "late"); "accepted" },
+    tryCatch({
+      ca_complete(task, "late")
+      "accepted"
+    },
       canard_lease_lost = function(e) "fenced")
   }, args = list(fixture$uri, fixture$directory), libpath = .libPaths(), supervise = TRUE)
   withr::defer(if (late$is_alive()) late$kill())
