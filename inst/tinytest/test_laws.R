@@ -48,7 +48,10 @@ local({
         current <- ca_claim(db)
       }
       rejected <- vapply(stale, function(task) {
-        tryCatch({ ca_complete(task, "stale"); FALSE },
+        tryCatch({
+          ca_complete(task, "stale")
+          FALSE
+        },
           canard_lease_lost = function(e) TRUE)
       }, logical(1L))
       ca_complete(current, "current")

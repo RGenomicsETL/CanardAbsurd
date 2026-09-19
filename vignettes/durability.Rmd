@@ -69,9 +69,47 @@ explicit decision, the error propagates.
 Recovery replaces an expired lease when the failure budget allows another
 attempt. The `attempt` counter counts claims, including sleep resumptions. The
 `failures` counter counts reported failures and expired leases. `max_failures`
-is the threshold for terminal failure. Reaping happens on the claim path, so an
-expired last attempt is marked failed when workers next poll its queue.
-`reap_limit` controls the size of that maintenance batch; its default is 64 rows.
+is the threshold for terminal failure. Before claiming, `ca_claim()` and
+`ca_work()` mark a bounded batch of expired, exhausted tasks as failed in their
+selected queue. `reap_limit` defaults to 64. An expired task with failure budget
+remaining can instead be reclaimed by a worker; expiry does not by itself start
+another attempt.
+
+## Native lease maintenance
+
+A queue with no polling workers still needs cleanup when its final attempt
+expires. The optional `canard_coordinator` extension performs that cleanup across
+all queues, on a dedicated connection and native thread in the database-owner
+process. It increments the failure count, records `Lease expired`, clears the
+worker/token/deadline, and marks an exhausted task failed in one SQL statement.
+
+```mermaid
+flowchart LR
+  Poll["worker polls its queue"] --> Reap["mark expired final attempts failed"]
+  Native["optional native maintenance<br/>polls all queues"] --> Reap
+  Reap --> DB[("DuckDB task rows")]
+  Poll --> Claim["claim eligible work<br/>or reclaim an expired retryable task"]
+  Claim --> Handler["R worker runs the handler"]
+```
+
+Use `ca_coordinator_start()` on the `ca_open()` or `ca_serve()` owner handle, not
+a remote `ca_connect()` client. `poll_milliseconds` sets the maintenance interval;
+`reap_limit` bounds the tasks changed by each poll, not the amount of table data
+DuckDB may scan. The native loop does not replace worker polling and does not
+renew a worker's lease, run a handler, enforce CPU/memory admission, or decide
+which downstream tasks are ready.
+
+`ca_coordinator_status()` reports state, poll/reaped/error counters, and the last
+error. Starting the loop is not proof that maintenance SQL succeeds; inspect
+those counters and errors. `ca_coordinator_stop()` joins the thread and releases
+its connection. `ca_close()` does this automatically when the handle started the
+coordinator. The instance is one-shot: after stop, use a fresh database instance
+to start another coordinator.
+
+The extension is built separately against the stable DuckDB C extension API.
+Loading and starting it are explicit; opening an ordinary database does neither.
+See the [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
+for build, signing, and executable native integration tests.
 
 ## A replaced claim cannot write
 
@@ -170,12 +208,16 @@ objects. See `?ca_conditions` for the condition fields and retry notifications.
 
 ## Error metadata compatibility
 
-Two upstream paths discard structured information:
+Error preservation depends on the installed R driver and Quack build. Affected
+R wrappers discard the original condition's fields and cause chain; affected
+Quack bind paths turn the transported structured error into an
+`InvalidInputException`.
 
-- [DuckDB R #2711](https://github.com/duckdb/duckdb-r/issues/2711): the DBI rethrow
-  discards the original error fields and parent.
-- [Quack PR #212](https://github.com/duckdb/duckdb-quack/pull/212): the proposed
-  protocol change preserves the server's error type and transferable metadata.
+The R wrapper report is [duckdb-r #2711](https://github.com/duckdb/duckdb-r/issues/2711).
+The fixes in [duckdb-r #2714](https://github.com/duckdb/duckdb-r/pull/2714) and
+[duckdb-quack #212](https://github.com/duckdb/duckdb-quack/pull/212) are merged.
+Their merge status alone does not establish that an installed driver/extension
+pair includes both fixes.
 
 CanardAbsurd first uses a structured DuckDB transaction error when available.
 Otherwise, one compatibility adapter recognizes exact tested write-conflict
@@ -188,9 +230,11 @@ supplied it. Structured non-transaction types take precedence over the text.
 This is a workaround for released drivers, **not a stable error protocol**.
 Changed or unknown message forms propagate without a retry restart, as do
 transport failures. An unhandled recognized conflict also propagates: retry
-limits and delays still belong to the caller. Revalidate against the DuckDB/Quack pair in deployment when upgrading; the integration suite uses installed packages
-and independent R processes. Tests exercise DuckDB R 1.5.3 and 1.5.5 and the
-community Quack builds available for them.
+limits and delays still belong to the caller. Revalidate the DuckDB/Quack pair
+when upgrading; the integration suite uses installed packages and independent
+R processes. The package requires DuckDB R 1.5.5 or newer. Historical probes on
+1.5.3 explain the compatibility adapter, but that version is not a supported
+package runtime.
 
 ## External effects still need idempotency
 

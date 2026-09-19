@@ -10,7 +10,10 @@ local({
   id <- ca_spawn(db, "work", value)
   task <- ca_claim(db)
   calls <- 0L
-  fn <- function() { calls <<- calls + 1L; value }
+  fn <- function() {
+    calls <<- calls + 1L
+    value
+  }
   expect_identical(task@input, value)
   expect_identical(ca_step(task, key, fn), value)
   stored <- DBI::dbGetQuery(db@con,

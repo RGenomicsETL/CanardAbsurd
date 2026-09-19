@@ -102,7 +102,10 @@ local({
   db <- local_database()
   query <- db@query
   queries <- 0L
-  db@query <- function(sql) { queries <<- queries + 1L; query(sql) }
+  db@query <- function(sql) {
+    queries <<- queries + 1L
+    query(sql)
+  }
   for (value in list(identity, globalenv(), quote(x + y), matrix(1:4, 2L),
     structure(1, class = "custom"), setNames(list(1, 2), c("x", "x")),
     as.Date(NaN, origin = "1970-01-01"),
@@ -126,7 +129,10 @@ for (remote in c(FALSE, TRUE)) local({
   # Case-colliding fields fail admission without issuing submission SQL.
   query <- db@query
   queries <- 0L
-  db@query <- function(sql) { queries <<- queries + 1L; query(sql) }
+  db@query <- function(sql) {
+    queries <<- queries + 1L
+    query(sql)
+  }
   for (value in case_collisions) {
     expect_error(ca_spawn(db, "invalid", value), class = "canard_value_error")
   }
@@ -138,7 +144,10 @@ for (remote in c(FALSE, TRUE)) local({
     id <- ca_spawn(db, "invalid", max_failures = 1L)
     calls <- 0L
     outcome <- ca_run(ca_claim(db), function(input, task) {
-      produce <- function() { calls <<- calls + 1L; value }
+      produce <- function() {
+        calls <<- calls + 1L
+        value
+      }
       if (operation == "step") ca_step(task, "invalid", produce) else produce()
     })
     expect_identical(calls, 1L)

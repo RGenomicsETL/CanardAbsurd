@@ -32,6 +32,22 @@ compatibility v1.5.0. This is separate from CanardAbsurd's own
 schema version, which remains 1. These unreleased schema-1 files require matching
 package code; no schema migration is provided.
 
+## Driver validation limits
+
+DuckDB R 1.5.5 can return malformed type descriptors under garbage-collection
+pressure while materializing VARIANT values. A local Linux probe reproduces
+corruption before CanardAbsurd restores the value. The missing-descriptor error
+in this [Windows package check](https://github.com/RGenomicsETL/CanardAbsurd/actions/runs/35221419601/job/105202242080)
+is consistent with that defect; the Windows run itself has not been reproduced
+locally.
+
+This can make inspection fail even though a task's SQL transition committed.
+The typed projections described below address nested-NULL conversion, but type
+descriptors still pass through the driver's generic VARIANT reader. Neither
+those projections nor a successful example establishes that this GC-sensitive
+path is safe. A driver-side allocation-protection fix is being tested; the
+minimum package version alone does not establish its presence.
+
 ## Field-name admission
 
 Named lists and data frame columns require nonempty names that are unique

@@ -125,6 +125,31 @@ A zero-second sleep demonstrates the state transition without delaying the
 render. Positive durations use the database clock. Sleeps do not consume the
 failure budget.
 
+## Several samples, then a cohort
+
+For genomics work, one sample task could have named steps for alignment and gVCF
+calling. Two samples are two tasks that separate workers can run concurrently.
+Joint genotyping is another task, submitted when the required sample outputs are
+ready.
+
+```mermaid
+flowchart LR
+  Sample1["sample-101 task<br/>align → call gVCF"] --> Saved1[("DuckDB<br/>sample-101 completed<br/>gVCF location")]
+  Sample2["sample-102 task<br/>align → call gVCF"] --> Saved2[("DuckDB<br/>sample-102 completed<br/>gVCF location")]
+  Saved1 --> Controller["application or targets<br/>checks cohort readiness"]
+  Saved2 --> Controller
+  Controller --> Joint["submit joint genotyping task"]
+```
+
+These arrows describe application orchestration, not a dependency API supplied
+by CanardAbsurd. Sequential `ca_step()` calls inside one sample handler are not
+independently scheduled jobs. A stored gVCF path also does not store the file:
+workers need access to the outputs and compatible execution environments.
+
+The optional native coordinator handles expired final attempts. It does not
+supply the cohort-readiness check in this diagram. See
+[native lease maintenance](durability.html#native-lease-maintenance).
+
 ## Choose a worker lifetime
 
 - `max_tasks = 1` executes one claimed attempt, including a failure or suspension.

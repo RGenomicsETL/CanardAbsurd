@@ -21,6 +21,16 @@ endpoint. Production deployment separates the server and
 workers as described below. This network-dependent article is built by pkgdown,
 while the package vignettes run offline.
 
+```mermaid
+flowchart LR
+  Producer["API / producer"] -->|"ca_connect()"| Quack
+  Worker["R worker<br/>ca_work()"] -->|"ca_connect()"| Quack
+  subgraph Owner["one database-owner process"]
+    Quack["Quack listener<br/>ca_serve()"] --> Database[("DuckDB file")]
+    Maintenance["optional native<br/>lease maintenance"] --> Database
+  end
+```
+
 ## Install the runtime
 
 Install DuckDB's Quack extension explicitly before serving or connecting. From
@@ -39,6 +49,24 @@ local({
 The extensions are stored in DuckDB's shared extension directory so later R
 processes using the same DuckDB runtime can load them. Package loading and
 connections never download extensions.
+
+## Optional maintenance belongs on the owner
+
+The `canard_coordinator` extension is separate from Quack. If it is available in
+the deployment, start it explicitly with `ca_coordinator_start()` on the owner
+handle returned by `ca_serve()`. A `ca_connect()` client is not its lifecycle
+owner. The ordinary server/worker path below does not require the extension.
+
+The native loop marks expired, exhausted attempts failed across all queues, even
+when no worker is polling them. It neither runs R handlers nor monitors external
+tools or downstream dependencies. Inspect progress and errors with
+`ca_coordinator_status()`. Stop it before database teardown;
+`ca_close()` does so for a coordinator started through that handle. Stopping is
+one-shot: a fresh database instance is required to start another loop.
+
+See [durability and recovery](durability.html#native-lease-maintenance) for the
+maintenance contract and [extension instructions](https://github.com/RGenomicsETL/CanardAbsurd/tree/main/tools/canard-coordinator)
+for building and signing. Installing Quack does not install this extension.
 
 ## Run the server/client path
 

@@ -91,7 +91,10 @@ if (requireNamespace("s7contract", quietly = TRUE)) local({
       tryCatch({
         ca_spawn(db, "work", id = "protocol", max_failures = 100L)
         db
-      }, error = function(error) { ca_close(db); stop(error) })
+      }, error = function(error) {
+        ca_close(db)
+        stop(error)
+      })
     },
     teardown = ca_close,
     classify = function(sequence) unique(vapply(sequence, `[[`, character(1L), "command")),
