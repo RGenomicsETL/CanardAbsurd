@@ -92,7 +92,7 @@ jobs:
       - name: Install runtime test dependencies
         shell: Rscript {0}
         run: |
-          install.packages(c("bit64", "DBI", "duckdb", "S7"))
+          install.packages(c("bit64", "DBI", "duckdb", "S7", "callr", "tinytest"))
           stopifnot(packageVersion("duckdb") >= "1.5.5")
 
       - name: Install CanardAbsurd from this checkout
@@ -122,3 +122,12 @@ jobs:
           extension=$(find artifacts/coordinator-build -type f -name 'canard_coordinator.duckdb_extension' -print -quit)
           test -n "$extension"
           Rscript tools/canard-coordinator/test/test-v1.R "$extension"
+
+      - name: Exercise the package coordinator lifecycle
+        shell: bash
+        run: |
+          extension=$(find artifacts/coordinator-build -type f -name 'canard_coordinator.duckdb_extension' -print -quit)
+          CANARDABSURD_COORDINATOR_EXTENSION="$extension" Rscript -e '
+            results <- tinytest::run_test_file(system.file("tinytest", "test_coordinator.R", package = "CanardAbsurd"))
+            print(results)
+            stopifnot(length(results) > 0L, all(vapply(results, isTRUE, logical(1L))))
