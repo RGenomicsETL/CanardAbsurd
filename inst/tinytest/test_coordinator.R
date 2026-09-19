@@ -33,8 +33,12 @@ local({
   ca_close(signed_only)
   expect_true(ca_coordinator_start(db, extension, poll_milliseconds = 10, reap_limit = 16))
   expect_false(ca_coordinator_start(db, poll_milliseconds = 10, reap_limit = 16))
+  # An expired final attempt in a queue no worker polls. The lease is set in SQL
+  # so this test never decodes a stored VARIANT; see test_values.R.
   id <- ca_spawn(db, "work", queue = "unpolled", max_failures = 1)
-  ca_claim(db, queue = "unpolled", lease_seconds = 0.05)
+  DBI::dbExecute(db@con, "UPDATE canard_absurd.tasks SET state = 'running', attempt = 1,
+    worker = 'test-worker', token = uuid(), lease_until = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+    WHERE id = ?", params = list(id))
   Sys.sleep(0.3)
   expect_identical(ca_tasks(db, id = id)$state, "failed")
   status <- ca_coordinator_status(db)
