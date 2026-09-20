@@ -6,6 +6,7 @@ output: github_document
 
 # CanardAbsurd <img src="man/figures/logo.png" align="right" width="140" alt="CanardAbsurd hex sticker: Ce n’est pas un canard." />
 
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![R-CMD-check](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/R-CMD-check.yaml)
 [![Documentation](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/RGenomicsETL/CanardAbsurd/actions/workflows/pkgdown.yaml)
 [![R-universe](https://rgenomicsetl.r-universe.dev/badges/CanardAbsurd)](https://rgenomicsetl.r-universe.dev/CanardAbsurd)
@@ -18,6 +19,10 @@ It brings the checkpoint-and-replay model of
 [Absurd](https://github.com/earendil-works/absurd) to R, with DuckDB holding the
 state and [Quack](https://github.com/duckdb/duckdb-quack) giving other processes
 access to it.
+
+The package is experimental and has no users outside itself. The API, the SQL
+schema and the stored format all change without deprecation cycles or
+migrations, in favour of a clearer model.
 
 ## Install
 
