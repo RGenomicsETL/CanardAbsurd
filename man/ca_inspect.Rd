@@ -17,8 +17,8 @@ and result, and checkpoint records; \code{NULL} for an unknown ID. Step records
 contain \code{kind} and \code{value}; sleep records contain \code{kind}.
 }
 \description{
-State and checkpoint membership come from one metadata query. A second query
-retrieves the referenced immutable values; later checkpoints or completion
-become visible on the next inspection. This relies on mutations using the
-package protocol rather than modifying stored payloads directly.
+Reads one task's metadata, then its stored values in a second query, so work
+saved in between appears on the next call. Stored values are immutable under
+the package protocol; editing payloads directly breaks that. Use \code{\link[=ca_tasks]{ca_tasks()}}
+to poll many tasks and \code{\link[=ca_result]{ca_result()}} for a result on its own.
 }

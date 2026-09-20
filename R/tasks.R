@@ -1,14 +1,13 @@
 #' Submit a durable task
 #'
-#' Reusing an ID with the same submission is idempotent, including after
-#' completion. A different submission under that ID raises
-#' `canard_spawn_conflict`. Supply a stable ID to recover from a lost submission
-#' response. Input equality compares the native value and its R type descriptor.
-#' A structured constraint failure is followed by an existing-submission lookup,
-#' not another write. A match acknowledges the existing task; a different
-#' submission raises `canard_spawn_conflict`. Without an existing task the
-#' original storage error is retained. If lookup fails, its storage condition
-#' also carries the original failure as `submission_error`.
+#' Reusing an ID with an identical submission is idempotent, even after the task
+#' has completed, so a lost response can be resubmitted safely. A different
+#' submission under that ID raises `canard_spawn_conflict`. Equality covers the
+#' native value and its R type descriptor.
+#'
+#' A constraint failure is resolved by looking the existing task up rather than
+#' writing again. If no task is found, the original storage error stands; if the
+#' lookup itself fails, its condition carries that error as `submission_error`.
 #'
 #' @inheritParams ca_close
 #' @param name Registered handler name.
@@ -52,10 +51,10 @@ ca_spawn <- function(db, name, input = NULL, queue = "default", id = NULL,
 
 #' Claim an eligible task
 #'
-#' Expired leases are recoverable until the failure budget is exhausted.
-#' Claims use optimistic DuckDB transactions. Callers can handle
-#' `canard_retryable` to retry a conflicting statement; see [ca_conditions()].
-#' No database transaction remains open while an R handler executes.
+#' Takes the next eligible task in `queue` under a lease. Expired leases are
+#' reclaimable until the failure budget runs out. Claims use optimistic DuckDB
+#' transactions, so callers outside [ca_work()] handle `canard_retryable`
+#' themselves; see [ca_conditions()]. No transaction is held while a handler runs.
 #'
 #' @inheritParams ca_spawn
 #' @param worker Worker label used for inspection; lease tokens establish ownership.
@@ -102,10 +101,10 @@ ca_claim <- function(db, queue = "default", worker = paste0("R-", Sys.getpid()),
 
 #' Inspect a task
 #'
-#' State and checkpoint membership come from one metadata query. A second query
-#' retrieves the referenced immutable values; later checkpoints or completion
-#' become visible on the next inspection. This relies on mutations using the
-#' package protocol rather than modifying stored payloads directly.
+#' Reads one task's metadata, then its stored values in a second query, so work
+#' saved in between appears on the next call. Stored values are immutable under
+#' the package protocol; editing payloads directly breaks that. Use [ca_tasks()]
+#' to poll many tasks and [ca_result()] for a result on its own.
 #' @inheritParams ca_spawn
 #' @return A named list containing task state, counters, timestamps, R input
 #'   and result, and checkpoint records; `NULL` for an unknown ID. Step records

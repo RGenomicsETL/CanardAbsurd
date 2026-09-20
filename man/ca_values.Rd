@@ -4,51 +4,47 @@
 \alias{ca_values}
 \title{Native workflow values}
 \description{
-Inputs, results, and checkpoint values are native DuckDB \code{VARIANT} values.
-R type descriptors preserve the distinction between vectors, lists, and data
-frames, including typed missing values. Payloads remain queryable with DuckDB
-field access, \code{variant_extract()}, and casts. The package does not impose byte
-limits. Engine memory, storage, and transport limits still apply.
+Inputs, results and checkpoint values are stored as DuckDB \code{VARIANT} values,
+queryable with field access, \code{variant_extract()} and casts. An R type
+descriptor stored beside each value records what SQL cannot: \code{NULL} versus a
+typed \code{NA}, vector versus list, data frame versus named list, and names,
+factor levels, time zones, row names and \code{I()} wrappers.
 }
 \details{
-Supported values are \code{NULL}, logical, integer, double, character and raw
+Supported values are \code{NULL}; logical, integer, double, character and raw
 vectors; \code{Date}, \code{POSIXct}, \code{difftime}, factors, ordered factors and
-\code{bit64::integer64}; and recursively composed lists and ordinary data frames.
-Vector names, factor levels, timestamp time zones, data frame row names, and
-\code{I()} wrappers are retained. Named lists and data frame columns must have
-nonempty names that are unique ignoring ASCII letter case, as required by
-DuckDB STRUCT fields. Names are stored unchanged; \code{A} and \code{a} cannot occur
-together in one named list or data frame. This restriction does not apply
-to atomic vector names. Missing factor levels are not supported.
+\code{bit64::integer64}; and lists and ordinary data frames composed of those.
+They map as:
+\itemize{
+\item length-one logical, integer, double and character values to the matching
+DuckDB scalar type, and longer vectors to typed lists;
+\item raw vectors to BLOB, \code{Date} to DATE, \code{POSIXct} to TIMESTAMPTZ, \code{difftime}
+to INTERVAL, factors to VARCHAR, and \code{integer64} to BIGINT;
+\item named lists and data frames to objects, unnamed lists to arrays.
+}
 
-Logical, integer, double and character vectors map to their DuckDB scalar
-type when length one, and to typed lists otherwise. Raw vectors map to BLOB.
-Named lists and data frames map to objects; unnamed lists map to arrays.
-Dates map to DATE, timestamps to TIMESTAMPTZ, and durations to INTERVAL.
-Timestamps and durations are rounded to DuckDB microsecond precision. Dates
-must be whole finite days or missing. Timestamps and durations must be finite
-or missing. IEEE double infinities and NaN are preserved.
+Timestamps and durations are rounded to DuckDB microsecond precision and must
+be finite or missing; dates must be whole finite days or missing. Double
+infinities and \code{NaN} survive, and factor levels must not be missing. Names of
+list elements and data frame columns become STRUCT fields, so they must be
+nonempty and unique ignoring ASCII case: \code{A} and \code{a} cannot share a container.
+Atomic vector names are unrestricted.
 
-Custom classes, matrices, environments, functions and language objects need
-explicit conversion to a supported representation. The package does not
-serialize arbitrary R objects or download extensions for value conversion.
-Callers can explicitly store serialized bytes as BLOBs: base \code{serialize()},
-qs2 and Sakura all provide raw-vector paths. Decoding and reference-object
-reconstruction remain the handler's responsibility; only trusted payloads
-should be deserialized. See \code{vignette("serialized-values")}.
-The mappings follow the declared-type approach used by
-\href{https://github.com/RGenomicsETL/Rducks}{Rducks}; Rducks is not a dependency.
+Anything else, including custom classes, matrices, environments and language
+objects, needs explicit conversion. The package never serializes objects for
+you, nor downloads extensions to convert them: store your own bytes as a raw
+vector and decode them in the handler, deserializing only trusted payloads.
+See \code{vignette("serialized-values")}. The mappings follow the declared-type
+approach of \href{https://github.com/RGenomicsETL/Rducks}{Rducks}, which is not a
+dependency.
 
-Files use DuckDB storage compatibility v1.5.0 or newer. The \code{input_rtype},
-\code{result_rtype}, and checkpoint \code{rtype} fields contain R mapping descriptors.
-Claims and checkpoint replay read descriptors first, then fetch typed SQL
-projections. This also supports nested missing values in released R drivers.
-Whole-value materialization avoids indexed VARIANT field extraction on
-affected engines. See \code{vignette("native-values")} for executable reproducers,
-affected runtimes and read-failure semantics. Each state transition remains
-one server-side SQL statement.
+Values are read back through descriptor-typed projections rather than the
+driver's generic VARIANT decoder; \code{vignette("native-values")} explains why and
+lists the driver defects involved. Files need DuckDB storage compatibility
+v1.5.0. There is no package byte limit, though engine memory, disk and
+transport still apply.
 
-Unsupported values raise \code{canard_value_error}, a \code{canard_input_error} with
-the original conversion error in \code{parent}. A step callback returning such a
-value has failed; no checkpoint is committed for that step.
+An unsupported value raises \code{canard_value_error}, a \code{canard_input_error}
+carrying the conversion failure in \code{parent}. A step callback returning one has
+failed, and no checkpoint is saved for it.
 }

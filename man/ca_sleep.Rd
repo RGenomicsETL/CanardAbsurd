@@ -18,9 +18,9 @@ ca_sleep(task, name, seconds)
 \code{canard_suspended} after persisting the suspension.
 }
 \description{
-Saves a sleep checkpoint and releases the claim atomically. The worker resumes
-the handler from its beginning after the deadline, replaying completed steps.
-The sleep returns immediately when replayed. Code after the sleep does not run
-in the suspended attempt. \code{canard_suspended} is a control-flow condition rather
-than an error, so an ordinary error handler does not swallow suspension.
+Saves a sleep checkpoint and releases the claim in one statement. Code after
+the sleep does not run in this attempt: after the deadline a worker reruns the
+handler from the top, replaying completed steps, and the sleep returns at
+once. Suspension travels as \code{canard_suspended}, a control-flow condition, so
+an ordinary error handler does not swallow it.
 }

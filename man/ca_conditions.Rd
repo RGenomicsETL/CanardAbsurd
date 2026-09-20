@@ -4,77 +4,58 @@
 \alias{ca_conditions}
 \title{Workflow conditions}
 \description{
-CanardAbsurd uses R conditions with machine-readable subclasses and fields.
-Errors inherit from \code{canard_error} as well as \code{error} and \code{condition}.
+CanardAbsurd signals R conditions with machine-readable subclasses and
+fields. Errors inherit from \code{canard_error}, \code{error} and \code{condition}.
 }
 \details{
 \itemize{
-\item \code{canard_input_error} identifies the S7 input constructor in \code{input_class}
-and preserves its property-validation failure in \code{parent}. Admission happens
-before database effects; internal execution uses the admitted input.
-\item \code{canard_storage_error} preserves the DBI condition in \code{parent}, with
-\code{operation}, total SQL \code{attempts}, and \code{elapsed} seconds. Its subclass
-\code{canard_conflict} denotes a known transaction conflict. Retry policy belongs
-to the caller, not the connection. A conflict's \code{message_based} flag is
-\code{FALSE} when classified from structured DuckDB metadata and \code{TRUE} when
-classified by the compatibility adapter described below.
-\item \code{canard_lease_lost} and \code{canard_protocol_error} are storage errors with \code{id}
-and \code{operation}. Lease loss also carries the claim \code{attempt}.
-\item \code{canard_spawn_conflict} carries the conflicting \code{id}.
-\item \code{canard_result_error} carries the \code{id} and \code{state} of a task without a
-result; see \code{\link[=ca_result]{ca_result()}}.
-\item \code{canard_replay_error} carries \code{id} and checkpoint \code{name}.
-\item \code{canard_schema_error} carries the unsupported \code{version}.
-\item \code{canard_extension_error} preserves the load failure in \code{parent}.
-\item \code{canard_failure_recording_error} is a storage error with the handler error
-in \code{parent} and the failure to record it in \code{persistence_error}.
+\item \code{canard_input_error}: invalid arguments, rejected before any database
+effect. \code{input_class} names the S7 constructor and \code{parent} holds the
+validation failure. Its subclass \code{canard_value_error} reports an
+unsupported value; see \link{ca_values}.
+\item \code{canard_storage_error}: a failed SQL operation, carrying \code{operation},
+\code{attempts}, \code{elapsed} seconds and the DBI condition in \code{parent}. Its
+subclasses are \code{canard_conflict} (a known write conflict, whose
+\code{message_based} flag is \code{TRUE} when the compatibility adapter below
+classified it), \code{canard_lease_lost} (the claim is gone; adds \code{id} and
+\code{attempt}), \code{canard_restore_error} (a stored value would not decode as its
+recorded R type; adds \code{id}), \code{canard_failure_recording_error} (a handler
+failed and recording it failed too, kept in \code{parent} and
+\code{persistence_error}), and \code{canard_protocol_error}.
+\item \code{canard_spawn_conflict}: the \code{id} already holds a different submission.
+\item \code{canard_result_error}: the task is unknown or unfinished; carries \code{id} and
+\code{state}. See \code{\link[=ca_result]{ca_result()}}.
+\item \code{canard_replay_error}: a step name repeated within an attempt, or its kind
+changed; carries \code{id} and \code{name}.
+\item \code{canard_process_error}: a command from \code{\link[=ca_process]{ca_process()}} failed or timed out;
+carries \code{id}, \code{status} (\code{NA} on timeout) and the \code{directory} holding logs.
+\item \code{canard_close_error}: \code{\link[=ca_close]{ca_close()}} released everything it owns, but some
+step failed; \code{errors} lists them and \code{parent} is the first.
+\item \code{canard_schema_error} carries the unsupported \code{version},
+\code{canard_extension_error} the load failure in \code{parent}, and
+\code{canard_coordinator_error} and \code{canard_connection_error} report a
+coordinator called on the wrong or closed handle.
 }
 
-A known conflict first signals \code{canard_retryable}, a notification with the
-same fields as the storage error. A caller's \code{withCallingHandlers()} handler
-can wait and invoke the \code{canard_retry} restart to repeat only that SQL
-statement. If the handler returns without invoking the restart, or no handler
-is supplied, the conflict propagates as an error. Individual operations impose
-no retry schedule. \code{\link[=ca_work]{ca_work()}} installs a bounded default; \code{conflict_retries = 0}
-removes it, and a calling handler established inside a task handler runs
-before it. Errors raised by a calling handler propagate to its caller. Other
-storage failures offer no retry restart.
+Two conditions are notifications rather than errors. \code{canard_suspended}
+unwinds to \code{\link[=ca_run]{ca_run()}} once \code{\link[=ca_sleep]{ca_sleep()}} has saved a suspension, so an ordinary
+error handler does not swallow it. \code{canard_retryable} announces a known write
+conflict before it is raised: a \code{withCallingHandlers()} handler may wait and
+invoke the \code{canard_retry} restart to repeat that one SQL statement, never an R
+callback. \code{\link[=ca_work]{ca_work()}} does this by default and signals
+\code{canard_conflict_retry} (\code{conflict}, \code{attempts}, \code{delay}) before each retry;
+\code{conflict_retries = 0} leaves the policy to you. Handlers that return without
+restarting, and errors they raise, propagate to the caller.
 
-\code{canard_conflict_retry} is a notification signalled by \code{\link[=ca_work]{ca_work()}} before it
-repeats a conflicting statement. It carries the \code{conflict} notification, its
-\code{attempts}, and the \code{delay} in seconds. Ignoring it changes nothing.
+Unless given \code{on_result}, \code{\link[=ca_work]{ca_work()}} warns about a handler failure with
+\code{canard_task_failed}, keeping the condition in \code{parent} and the attempt record
+in \code{outcome}.
 
-\code{canard_restore_error} is a storage error raised when a value read under the
-package protocol cannot be restored as its recorded R type. It carries \code{id}
-and \code{operation}, and the decoding failure in \code{parent}. As with a failed read,
-no handler failure is recorded and the callback that produced a checkpoint is
-not rerun.
-
-\code{canard_close_error} reports cleanup failures from \code{\link[=ca_close]{ca_close()}}. Every owned
-resource is still released; \code{errors} lists each failure in order, and \code{parent}
-is the first.
-
-\code{canard_process_error} reports a supervised command from \code{\link[=ca_process]{ca_process()}} that
-exited unsuccessfully or exceeded its timeout. It carries \code{id}, \code{status}
-(\code{NA} after a timeout), and the attempt \code{directory} containing its logs.
-
-Current DuckDB R rethrows drop structured fields
-(\url{https://github.com/duckdb/duckdb-r/issues/2711}), and released Quack builds
-lose the server's error type
-(\url{https://github.com/duckdb/duckdb-quack/pull/212}). Until both preserve that
-metadata, a compatibility adapter recognizes exact tested conflict messages
-and duplicate-key messages for the submitted ID. This depends on upstream
-display wording, not a stable protocol. Unknown forms propagate without a
-retry restart. Structured non-transaction errors take precedence over text.
-The package requires DuckDB R 1.5.5 or newer; tests use its community
-Quack build. Earlier probes on 1.5.3 motivated the adapter, but 1.5.3 is
-not a supported runtime.
-
-\code{canard_suspended} is a control-flow condition, not an error. It carries \code{id}
-and \code{attempt} and unwinds to \code{\link[=ca_run]{ca_run()}} after a durable sleep is saved.
-
-Unless given an \code{on_result} callback, \code{\link[=ca_work]{ca_work()}} warns on handler failure with
-\code{canard_task_failed}, retaining the original condition in \code{parent} and the
-complete attempt record in \code{outcome}. It does not warn on successful retries
-or durable sleeps. SQL state names describe persisted state, not error types.
+Released DuckDB R and Quack builds discard the structured type of some errors
+(\url{https://github.com/duckdb/duckdb-r/issues/2711},
+\url{https://github.com/duckdb/duckdb-quack/pull/212}). Until the installed
+versions carry both fixes, write conflicts are recognized from exact tested
+message text, which depends on upstream wording rather than a stable protocol.
+Structured non-transaction errors take precedence over text, and unrecognized
+messages never become retryable. See \code{vignette("durability")}.
 }

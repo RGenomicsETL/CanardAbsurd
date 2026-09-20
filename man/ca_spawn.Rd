@@ -36,13 +36,13 @@ version 1 accepts values from 1 through 1,000,000.}
 The task ID, a character scalar.
 }
 \description{
-Reusing an ID with the same submission is idempotent, including after
-completion. A different submission under that ID raises
-\code{canard_spawn_conflict}. Supply a stable ID to recover from a lost submission
-response. Input equality compares the native value and its R type descriptor.
-A structured constraint failure is followed by an existing-submission lookup,
-not another write. A match acknowledges the existing task; a different
-submission raises \code{canard_spawn_conflict}. Without an existing task the
-original storage error is retained. If lookup fails, its storage condition
-also carries the original failure as \code{submission_error}.
+Reusing an ID with an identical submission is idempotent, even after the task
+has completed, so a lost response can be resubmitted safely. A different
+submission under that ID raises \code{canard_spawn_conflict}. Equality covers the
+native value and its R type descriptor.
+}
+\details{
+A constraint failure is resolved by looking the existing task up rather than
+writing again. If no task is found, the original storage error stands; if the
+lookup itself fails, its condition carries that error as \code{submission_error}.
 }

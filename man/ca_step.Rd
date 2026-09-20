@@ -19,13 +19,14 @@ and durations have DuckDB microsecond precision. A cached \code{NULL} is distinc
 from an absent checkpoint.
 }
 \description{
-The callback runs outside a transaction. Its result is checkpointed only after
-it returns, so external effects must be idempotent. Lease tokens fence database
-writes, not external services. Use stable business keys for external requests.
+Runs \code{fn} and saves its result under \code{name}, or returns the saved value when
+this task already has one. The callback runs outside any transaction, and its
+result is saved only once it returns, so external effects must be idempotent:
+lease tokens fence database writes, not other services. Give external requests
+stable business keys.
 }
 \details{
-Step names must be unique in an attempt and stable across deployments. Include
-an explicit index for repeated steps in a loop. Checkpoint results must remain
-compatible with handlers that can resume existing tasks. The package imposes
-no per-step or cumulative checkpoint byte limit.
+Step names must be unique within an attempt and stable across deployments, so
+index repeated steps in a loop. Keep saved results readable by handlers that
+may resume existing tasks.
 }

@@ -7,11 +7,11 @@
 
 #' Open a local workflow database
 #'
-#' Installs schema version 1 in a transaction, or checks the existing version.
-#' The handle owns its DBI connection. Close it explicitly with [ca_close()].
-#' No extensions are downloaded. Local handles use a session-private DuckDB
-#' home. A file-backed database has one owning process; other processes connect
-#' to a Quack server rather than opening that file.
+#' Opens a workflow database in this process, installing schema version 1 or
+#' checking the existing one. The handle owns its DBI connection; close it with
+#' [ca_close()]. Extensions are never downloaded, and the DuckDB home is
+#' session-private. A file-backed database has one owning process: others reach
+#' it through a Quack server instead of opening the file.
 #'
 #' @param path DuckDB database path, or `":memory:"`.
 #' @param allow_unsigned_extensions Development-only opt-in for loading an
@@ -88,12 +88,11 @@ ca_open <- function(path = ":memory:", allow_unsigned_extensions = FALSE) {
 
 #' Serve a workflow database over Quack
 #'
-#' The calling process owns the database and must remain alive. Quack handles
-#' SQL requests on its native server threads; R task handlers run in clients.
-#' Protect non-local endpoints with authenticated ingress and TLS. With
-#' `extension = NULL`, the server explicitly uses DuckDB's shared home to find
-#' the preinstalled Quack extension; an extension path uses session-private
-#' storage.
+#' The calling process owns the database and must stay alive. Quack answers SQL
+#' on its own server threads; handlers run in clients. Put non-local endpoints
+#' behind authenticated, TLS-terminating ingress. With `extension = NULL` the
+#' preinstalled `quack` extension is loaded from DuckDB's shared home; a path
+#' loads that build into session-private storage.
 #'
 #' @inheritParams ca_open
 #' @param uri Quack endpoint, including a port when not using the default.
@@ -122,14 +121,12 @@ ca_serve <- function(path, uri = "quack:127.0.0.1:9494", token, extension = NULL
 
 #' Connect to a workflow server
 #'
-#' Uses DuckDB's Quack client, which also loads the `httpfs` extension. Install
-#' both explicitly: connections never download extensions. Each state
-#' transition executes in one server-side SQL statement; typed value retrieval
-#' can require a separate read. The client owns only an in-memory DuckDB
-#' connection, not a second writable handle to the server's database file. With
-#' `extension = NULL`, the client explicitly uses DuckDB's shared home to find
-#' the preinstalled extensions; an extension path uses session-private storage
-#' and also loads `httpfs.duckdb_extension` from the same directory when present.
+#' Connects to a [ca_serve()] endpoint. The client holds only an in-memory
+#' DuckDB connection, never a second writable handle to the server's file. Quack
+#' clients also load DuckDB's `httpfs` extension; install both explicitly,
+#' because connections never download extensions. With `extension = NULL` both
+#' come from DuckDB's shared home; a path loads that build plus any
+#' `httpfs.duckdb_extension` beside it into session-private storage.
 #'
 #' @inheritParams ca_serve
 #' @return An S7 `CanardConnection` handle.
@@ -158,14 +155,13 @@ ca_connect <- function(uri = "quack:127.0.0.1:9494", token, extension = NULL) {
 
 #' Close a client or server
 #'
-#' Stops the Quack endpoint of a server handle, stops a loaded native
-#' coordinator, and closes the DuckDB connection. Each step is attempted even if
-#' an earlier one fails; the failures are then raised together as
-#' `canard_close_error`.
+#' Stops a server handle's Quack endpoint, stops a loaded native coordinator,
+#' and closes the DuckDB connection. Every step is attempted even if an earlier
+#' one fails, and the failures are raised together as `canard_close_error`.
 #'
-#' After a statement on the connection has failed, DuckDB R keeps the database,
-#' and its file lock, until R garbage-collects that statement. Another process
-#' can open a file-backed database only after that collection.
+#' After a statement on the connection has failed, DuckDB R holds the database,
+#' and its file lock, until R garbage-collects that statement; only then can
+#' another process open a file-backed database.
 #'
 #' @param db A handle returned by [ca_open()], [ca_serve()], or [ca_connect()].
 #' @return `NULL`, invisibly. Closing an already closed handle is harmless.

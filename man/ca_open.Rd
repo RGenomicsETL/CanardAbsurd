@@ -18,11 +18,11 @@ that includes every Quack token holder. Leave it \code{FALSE} in deployments.}
 An S7 \code{CanardConnection} handle.
 }
 \description{
-Installs schema version 1 in a transaction, or checks the existing version.
-The handle owns its DBI connection. Close it explicitly with \code{\link[=ca_close]{ca_close()}}.
-No extensions are downloaded. Local handles use a session-private DuckDB
-home. A file-backed database has one owning process; other processes connect
-to a Quack server rather than opening that file.
+Opens a workflow database in this process, installing schema version 1 or
+checking the existing one. The handle owns its DBI connection; close it with
+\code{\link[=ca_close]{ca_close()}}. Extensions are never downloaded, and the DuckDB home is
+session-private. A file-backed database has one owning process: others reach
+it through a Quack server instead of opening the file.
 }
 \examples{
 db <- ca_open()

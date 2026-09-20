@@ -32,30 +32,27 @@ directory per task and step.}
 The attempt directory path, after the command exits with status 0.
 }
 \description{
-Runs a command in its own process while the calling R worker renews the task
-lease, so work longer than one lease does not let another worker reclaim the
-task. Use it for aligners, callers, and other programs, or for blocking R
-computation run through \code{Rscript}. A timer in the blocked R process cannot
-renew a lease; this supervisor stays outside the blocking work.
+Runs a command in a child process while the worker keeps the task lease
+alive, so work longer than one lease is not reclaimed by another worker. Use
+it for external tools, or for blocking R computation run through \code{Rscript}: a
+timer inside the blocked process cannot renew anything.
 }
 \details{
-The lease is renewed before the command starts, so no work begins on a lost
-claim, and then every \code{heartbeat_seconds} while it runs. The command runs in
-\verb{attempt-<n>} inside \code{directory}, with standard output and error written to
-\code{stdout.log} and \code{stderr.log} there. Relative output paths in \code{args} land in
-that attempt directory. A later attempt cannot overwrite an earlier attempt's
-files, and an existing attempt directory is an error rather than reused.
+The lease is renewed before the command starts, so nothing begins on a lost
+claim, and then every \code{heartbeat_seconds}. The command runs in \verb{attempt-<n>}
+under \code{directory} and writes \code{stdout.log} and \code{stderr.log} there, so relative
+output paths stay inside that attempt and no later attempt overwrites an
+earlier one's files. An existing attempt directory is an error. Publish
+results by returning paths from a \code{\link[=ca_step]{ca_step()}} callback: only the current lease
+holder can save that checkpoint.
 
-If the lease is lost, including by \code{\link[=ca_cancel]{ca_cancel()}}, the timeout passes, or the
-supervising R code is interrupted or fails, the command's process tree is
-killed. Lease loss raises \code{canard_lease_lost}; a nonzero exit or a timeout
-raises \code{canard_process_error}, which a handler records as an ordinary failure.
-Publish results by returning paths from a \code{\link[=ca_step]{ca_step()}} callback: only the
-current lease holder can save that checkpoint.
+Lease loss, including from \code{\link[=ca_cancel]{ca_cancel()}}, a timeout, or an error or interrupt
+in the supervising code kills the command's process tree. Lease loss raises
+\code{canard_lease_lost}; a nonzero exit or timeout raises \code{canard_process_error},
+which a handler records as an ordinary failure.
 
-Supervision cannot guarantee that two attempts never overlap physically. A
-paused or partitioned worker can outlive its lease before its next heartbeat.
-Jobs submitted to Slurm or another backend need that backend's own
-submission, discovery, and cancellation identities; supervising the submit
-command does not supervise the remote job.
+Overlap remains possible: a paused or partitioned worker can outlive its lease
+before the next heartbeat. Work submitted to Slurm or a similar backend needs
+that backend's own job identity, since supervising the submitting command does
+not supervise the job.
 }

@@ -22,9 +22,9 @@ leave the task ready for retry or terminally failed. Error text is stored
 without truncation; the R condition remains available in this outcome.
 }
 \description{
-Calls \code{handler(task@input, task)}, records its result, or records a handler
-error as a task failure. Interrupts, lease loss, and persistence errors
-propagate to the caller. A storage failure is not charged to the handler's
-failure budget. If recording a handler failure also fails, both conditions
-are retained in \code{canard_failure_recording_error}; see \code{\link[=ca_conditions]{ca_conditions()}}.
+Calls \code{handler(task@input, task)} and records its result, or records a
+handler error as a task failure. Interrupts, lease loss and storage errors
+propagate instead, and do not use the failure budget. If recording a handler
+failure also fails, \code{canard_failure_recording_error} keeps both conditions;
+see \code{\link[=ca_conditions]{ca_conditions()}}.
 }

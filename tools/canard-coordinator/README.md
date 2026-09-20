@@ -1,34 +1,30 @@
 # Canard coordinator extension
 
-This loadable DuckDB extension targets stable C API **v1.2.0** and later. It uses
-v1 pending execution to drive a short maintenance mutation from a native thread;
-it does not require C API v2.
-
-The extension currently owns one operation: bounded reaping of expired running
-tasks that have exhausted `max_failures`. It exposes:
+A loadable DuckDB extension that marks abandoned tasks failed across every
+queue, from a native thread in the process that owns the database. Workers
+already do this for the queues they poll; the coordinator covers queues nobody
+polls. It dispatches no jobs, allocates no resources, and runs no R code.
 
 ```sql
-SELECT ca_coordinator_start(1000, 64); -- poll milliseconds, row limit
+SELECT ca_coordinator_start(1000, 64); -- poll milliseconds, rows per poll
 SELECT unnest(ca_coordinator_status());
 SELECT ca_coordinator_stop();
 ```
 
-Reaping applies the transition in `inst/sql/reap.sql` across all queues: mark
-an exhausted task failed, increment its failure count, record the lease-expiry
-error, and clear its worker, token, and lease deadline. It does not change
-retryable expired tasks, live leases, or terminal tasks.
+Each poll applies the transition in `inst/sql/reap.sql` to every queue: a
+running task whose lease expired with no budget left becomes `failed`, with its
+failure count raised, the lease error recorded, and its worker, token and
+deadline cleared. Retryable expired tasks, live leases and terminal tasks are
+untouched. `poll_count` counts polls whether they succeeded or not, and
+`last_error` describes the most recent one, so a running coordinator is not by
+itself evidence that maintenance is working.
 
-The extension opens its dedicated connection while its load entrypoint still
-has a valid borrowed database handle. `ca_coordinator_stop()` interrupts active
-database work, joins the thread, and closes that connection. The host must call
-it before closing the database, even if the extension was loaded but never
-started. The coordinator cannot restart on that database handle after the
-connection closes.
-
-The maintenance statement uses `duckdb_pending_prepared()` and repeatedly calls
-`duckdb_pending_execute_task()`. It counts a mutation only after
-`duckdb_execute_pending()` succeeds. Status reports both successful and failed
-polls in `poll_count`; `last_error` describes the latest poll.
+The extension targets the stable C API v1.2.0 and drives its statement with
+`duckdb_pending_prepared()` and `duckdb_pending_execute_task()`, so it needs no
+C API v2. It opens its own connection while loading, when its borrowed database
+handle is still valid. `ca_coordinator_stop()` interrupts that connection, joins
+the thread and closes it; the host must call it before closing the database,
+even if the coordinator never started. It cannot start again on that handle.
 
 ## Build against DuckDB 1.5.5
 
@@ -43,45 +39,44 @@ cmake -S . -B build/canard \
 cmake --build build/canard --target canard_coordinator_loadable_extension
 ```
 
-The output is under
-`build/canard/extension/canard_coordinator/canard_coordinator.duckdb_extension`.
+The result is `build/canard/extension/canard_coordinator/canard_coordinator.duckdb_extension`.
 
-Install this CanardAbsurd checkout before testing so the test uses the package's
-schema and task-input encoding, not a substitute table definition:
+## Test
+
+Install this checkout first, so the tests use the package's own schema and value
+encoding rather than a substitute table:
 
 ```sh
 R CMD INSTALL /absolute/path/to/CanardAbsurd
 ```
 
-From `tools/canard-coordinator`, run the compatibility test with the R `duckdb`
-1.5.5 package:
+The C API compatibility test covers exhausted tasks in several queues,
+untouched retryable, live and terminal tasks, ownership cleanup, argument
+validation and the one-shot lifecycle, cleaning up even when an assertion
+fails. It enables unsigned extensions only on its own temporary connection.
 
 ```sh
 Rscript test/test-v1.R /absolute/path/to/canard_coordinator.duckdb_extension
 ```
 
-The test checks exhausted tasks in multiple queues, unchanged retryable/live/
-terminal tasks, ownership cleanup, argument validation, and the one-shot
-lifecycle. Cleanup also runs when an assertion fails. Unsigned extensions are
-enabled only on its temporary development connection.
-
-Through the package, load a development build into a database opened with the
-explicit, development-only opt-in:
-
-```r
-db <- CanardAbsurd::ca_open(path, allow_unsigned_extensions = TRUE)
-CanardAbsurd::ca_coordinator_start(db, "/absolute/path/to/canard_coordinator.duckdb_extension")
-```
-
-That setting lets any SQL on the database load native code, including every
-Quack token holder when the database is served. No signed build is distributed;
-deployments without the opt-in cannot load this extension. The package lifecycle
-tests, including release of the database file on each close path, run with:
+The package lifecycle tests additionally check that each way of closing releases
+the database file:
 
 ```sh
 CANARDABSURD_COORDINATOR_EXTENSION=/absolute/path/to/canard_coordinator.duckdb_extension \
   Rscript -e 'tinytest::run_test_file(system.file("tinytest", "test_coordinator.R", package = "CanardAbsurd"))'
 ```
 
-This is a maintenance coordinator. It does not dispatch jobs, allocate physical
-resources, or execute R handlers.
+## Loading a local build
+
+No signed build is distributed, so a local one loads only into a database opened
+with the development-only opt-in:
+
+```r
+db <- CanardAbsurd::ca_open(path, allow_unsigned_extensions = TRUE)
+CanardAbsurd::ca_coordinator_start(db, "/absolute/path/to/canard_coordinator.duckdb_extension")
+```
+
+That setting lets any SQL on the database load native code, including from every
+Quack token holder once the database is served. Deployments without it cannot
+load this extension.

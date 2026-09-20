@@ -35,8 +35,8 @@ An S7 \code{CanardTask}, or \code{NULL} when no eligible task exists. Properties
 \code{lease_seconds} are used by task operations. Treat claims as process-local.
 }
 \description{
-Expired leases are recoverable until the failure budget is exhausted.
-Claims use optimistic DuckDB transactions. Callers can handle
-\code{canard_retryable} to retry a conflicting statement; see \code{\link[=ca_conditions]{ca_conditions()}}.
-No database transaction remains open while an R handler executes.
+Takes the next eligible task in \code{queue} under a lease. Expired leases are
+reclaimable until the failure budget runs out. Claims use optimistic DuckDB
+transactions, so callers outside \code{\link[=ca_work]{ca_work()}} handle \code{canard_retryable}
+themselves; see \code{\link[=ca_conditions]{ca_conditions()}}. No transaction is held while a handler runs.
 }

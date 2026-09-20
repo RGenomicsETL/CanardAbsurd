@@ -6,10 +6,11 @@
 \alias{CanardAbsurd-package}
 \title{Durable R workflows with DuckDB and Quack}
 \description{
-A package for hosting a workflow database and running thin R workers. Its
-checkpoint model is inspired by Absurd (\url{https://github.com/earendil-works/absurd}).
-See \code{\link[=ca_serve]{ca_serve()}} for hosting, \code{\link[=ca_connect]{ca_connect()}} for remote access, \code{\link[=ca_work]{ca_work()}} for
-workers, and \code{\link[=ca_step]{ca_step()}} for replay semantics.
+Submit tasks that outlive the process requesting them, run them in R workers
+under a lease, and replay named checkpoints after a crash. Host the database
+with \code{\link[=ca_open]{ca_open()}} or \code{\link[=ca_serve]{ca_serve()}}, reach it with \code{\link[=ca_connect]{ca_connect()}}, run tasks with
+\code{\link[=ca_work]{ca_work()}}, and save stages with \code{\link[=ca_step]{ca_step()}}. The checkpoint model follows
+Absurd (\url{https://github.com/earendil-works/absurd}).
 }
 \seealso{
 Useful links:

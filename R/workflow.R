@@ -20,14 +20,15 @@
 
 #' Execute or replay a named step
 #'
-#' The callback runs outside a transaction. Its result is checkpointed only after
-#' it returns, so external effects must be idempotent. Lease tokens fence database
-#' writes, not external services. Use stable business keys for external requests.
+#' Runs `fn` and saves its result under `name`, or returns the saved value when
+#' this task already has one. The callback runs outside any transaction, and its
+#' result is saved only once it returns, so external effects must be idempotent:
+#' lease tokens fence database writes, not other services. Give external requests
+#' stable business keys.
 #'
-#' Step names must be unique in an attempt and stable across deployments. Include
-#' an explicit index for repeated steps in a loop. Checkpoint results must remain
-#' compatible with handlers that can resume existing tasks. The package imposes
-#' no per-step or cumulative checkpoint byte limit.
+#' Step names must be unique within an attempt and stable across deployments, so
+#' index repeated steps in a loop. Keep saved results readable by handlers that
+#' may resume existing tasks.
 #'
 #' @inheritParams ca_heartbeat
 #' @param name Stable checkpoint name.
@@ -50,11 +51,11 @@ ca_step <- function(task, name, fn) {
 
 #' Suspend a workflow until a database-clock deadline
 #'
-#' Saves a sleep checkpoint and releases the claim atomically. The worker resumes
-#' the handler from its beginning after the deadline, replaying completed steps.
-#' The sleep returns immediately when replayed. Code after the sleep does not run
-#' in the suspended attempt. `canard_suspended` is a control-flow condition rather
-#' than an error, so an ordinary error handler does not swallow suspension.
+#' Saves a sleep checkpoint and releases the claim in one statement. Code after
+#' the sleep does not run in this attempt: after the deadline a worker reruns the
+#' handler from the top, replaying completed steps, and the sleep returns at
+#' once. Suspension travels as `canard_suspended`, a control-flow condition, so
+#' an ordinary error handler does not swallow it.
 #'
 #' @inheritParams ca_step
 #' @param seconds Nonnegative sleep duration in seconds.
@@ -72,11 +73,11 @@ ca_sleep <- function(task, name, seconds) {
 
 #' Execute one claimed workflow attempt
 #'
-#' Calls `handler(task@input, task)`, records its result, or records a handler
-#' error as a task failure. Interrupts, lease loss, and persistence errors
-#' propagate to the caller. A storage failure is not charged to the handler's
-#' failure budget. If recording a handler failure also fails, both conditions
-#' are retained in `canard_failure_recording_error`; see [ca_conditions()].
+#' Calls `handler(task@input, task)` and records its result, or records a
+#' handler error as a task failure. Interrupts, lease loss and storage errors
+#' propagate instead, and do not use the failure budget. If recording a handler
+#' failure also fails, `canard_failure_recording_error` keeps both conditions;
+#' see [ca_conditions()].
 #'
 #' @inheritParams ca_heartbeat
 #' @param handler Function taking `(input, ctx)`.
@@ -123,21 +124,21 @@ ca_run <- function(task, handler, failure_delay = 0) {
 
 #' Pull and execute R tasks
 #'
-#' Each worker executes one attempt at a time. Scale with independent R processes
-#' connected through Quack. Only registered handler names are claimed. Calls to
-#' named steps and [ca_heartbeat()] renew leases; no background R thread does so.
-#' Use [ca_process()] to supervise external commands that outlast a lease.
-#' The worker never terminates its host process on lease loss.
+#' Claims and runs tasks whose names appear in `handlers`, one attempt at a
+#' time, until `max_tasks` or `idle_timeout` is reached. Scale out with more
+#' worker processes connected through Quack. Leases are renewed by [ca_step()],
+#' [ca_sleep()] and [ca_heartbeat()] only; no background thread does it, so
+#' supervise long external commands with [ca_process()]. Losing a lease never
+#' ends the worker process.
 #'
-#' Competing workers select the same eligible row, and DuckDB aborts the losing
-#' statement with a write conflict. The worker therefore retries each known
-#' conflict, repeating only the aborted SQL statement and never an R callback.
-#' Retries back off exponentially from 10 milliseconds to at most half a second,
-#' with jitter taken from the clock and process ID so the R random number stream
-#' is unchanged. The default of 8 retries adds at most about 1.6 seconds of delay
-#' to one statement. Before each retry the worker signals `canard_conflict_retry`;
-#' see [ca_conditions()]. An exhausted budget propagates the `canard_conflict`
-#' error. Lease loss and ambiguous transport failures are never retried.
+#' Competing workers pick the same eligible task, and DuckDB aborts the losing
+#' statement. The worker retries such a statement up to `conflict_retries` times,
+#' backing off from 10 ms to 0.5 s (about 1.6 seconds in total by default),
+#' repeating only the SQL and never an R callback, and signalling
+#' `canard_conflict_retry` beforehand; see [ca_conditions()]. Jitter comes from
+#' the clock and process ID, leaving R's random number stream untouched. An
+#' exhausted budget raises `canard_conflict`. Lease loss and transport failures
+#' are never retried.
 #'
 #' @inheritParams ca_claim
 #' @inheritParams ca_run

@@ -1,30 +1,27 @@
 #' Supervise an external command within a task lease
 #'
-#' Runs a command in its own process while the calling R worker renews the task
-#' lease, so work longer than one lease does not let another worker reclaim the
-#' task. Use it for aligners, callers, and other programs, or for blocking R
-#' computation run through `Rscript`. A timer in the blocked R process cannot
-#' renew a lease; this supervisor stays outside the blocking work.
+#' Runs a command in a child process while the worker keeps the task lease
+#' alive, so work longer than one lease is not reclaimed by another worker. Use
+#' it for external tools, or for blocking R computation run through `Rscript`: a
+#' timer inside the blocked process cannot renew anything.
 #'
-#' The lease is renewed before the command starts, so no work begins on a lost
-#' claim, and then every `heartbeat_seconds` while it runs. The command runs in
-#' `attempt-<n>` inside `directory`, with standard output and error written to
-#' `stdout.log` and `stderr.log` there. Relative output paths in `args` land in
-#' that attempt directory. A later attempt cannot overwrite an earlier attempt's
-#' files, and an existing attempt directory is an error rather than reused.
+#' The lease is renewed before the command starts, so nothing begins on a lost
+#' claim, and then every `heartbeat_seconds`. The command runs in `attempt-<n>`
+#' under `directory` and writes `stdout.log` and `stderr.log` there, so relative
+#' output paths stay inside that attempt and no later attempt overwrites an
+#' earlier one's files. An existing attempt directory is an error. Publish
+#' results by returning paths from a [ca_step()] callback: only the current lease
+#' holder can save that checkpoint.
 #'
-#' If the lease is lost, including by [ca_cancel()], the timeout passes, or the
-#' supervising R code is interrupted or fails, the command's process tree is
-#' killed. Lease loss raises `canard_lease_lost`; a nonzero exit or a timeout
-#' raises `canard_process_error`, which a handler records as an ordinary failure.
-#' Publish results by returning paths from a [ca_step()] callback: only the
-#' current lease holder can save that checkpoint.
+#' Lease loss, including from [ca_cancel()], a timeout, or an error or interrupt
+#' in the supervising code kills the command's process tree. Lease loss raises
+#' `canard_lease_lost`; a nonzero exit or timeout raises `canard_process_error`,
+#' which a handler records as an ordinary failure.
 #'
-#' Supervision cannot guarantee that two attempts never overlap physically. A
-#' paused or partitioned worker can outlive its lease before its next heartbeat.
-#' Jobs submitted to Slurm or another backend need that backend's own
-#' submission, discovery, and cancellation identities; supervising the submit
-#' command does not supervise the remote job.
+#' Overlap remains possible: a paused or partitioned worker can outlive its lease
+#' before the next heartbeat. Work submitted to Slurm or a similar backend needs
+#' that backend's own job identity, since supervising the submitting command does
+#' not supervise the job.
 #'
 #' @inheritParams ca_heartbeat
 #' @param command Executable to run.

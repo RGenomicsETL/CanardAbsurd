@@ -13,19 +13,18 @@
 #' Start native task maintenance
 #'
 #' Loads the optional `canard_coordinator` extension in the database-owner
-#' process and starts its bounded expired-lease reaper. The extension uses a
-#' dedicated DuckDB connection and C API v1 pending execution.
+#' process and starts it marking abandoned tasks failed across every queue, on
+#' its own DuckDB connection and native thread. Workers keep doing the same for
+#' the queues they poll; this covers queues nobody polls.
 #'
-#' The coordinator is one-shot for the lifetime of this database handle. Call
-#' [ca_close()] or [ca_coordinator_stop()] to join its thread and release its
-#' connection before the owning DuckDB database is closed. The extension holds
-#' that connection from the moment it loads, so closing the DBI connection
-#' directly leaves the database open, locked, and maintained until the process
+#' It can start once per database instance. Call [ca_coordinator_stop()] or
+#' [ca_close()] to join the thread and release the connection: the extension
+#' holds that connection from the moment it loads, so closing the DBI connection
+#' directly leaves the database open, locked and maintained until the process
 #' exits.
 #'
-#' No signed build is distributed. A locally built extension loads only into a
-#' database opened with `allow_unsigned_extensions = TRUE`, a development-only
-#' setting; see [ca_open()].
+#' No signed build is distributed, so a local build loads only into a database
+#' opened with `allow_unsigned_extensions = TRUE`; see [ca_open()].
 #'
 #' @param db A local handle returned by [ca_open()] or [ca_serve()].
 #' @param extension Optional path to a compatible coordinator extension.

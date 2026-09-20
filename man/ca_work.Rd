@@ -60,20 +60,20 @@ The number of executed attempts, invisibly. Use \code{on_result} to collect
 outcomes without accumulating an unbounded result list inside the worker.
 }
 \description{
-Each worker executes one attempt at a time. Scale with independent R processes
-connected through Quack. Only registered handler names are claimed. Calls to
-named steps and \code{\link[=ca_heartbeat]{ca_heartbeat()}} renew leases; no background R thread does so.
-Use \code{\link[=ca_process]{ca_process()}} to supervise external commands that outlast a lease.
-The worker never terminates its host process on lease loss.
+Claims and runs tasks whose names appear in \code{handlers}, one attempt at a
+time, until \code{max_tasks} or \code{idle_timeout} is reached. Scale out with more
+worker processes connected through Quack. Leases are renewed by \code{\link[=ca_step]{ca_step()}},
+\code{\link[=ca_sleep]{ca_sleep()}} and \code{\link[=ca_heartbeat]{ca_heartbeat()}} only; no background thread does it, so
+supervise long external commands with \code{\link[=ca_process]{ca_process()}}. Losing a lease never
+ends the worker process.
 }
 \details{
-Competing workers select the same eligible row, and DuckDB aborts the losing
-statement with a write conflict. The worker therefore retries each known
-conflict, repeating only the aborted SQL statement and never an R callback.
-Retries back off exponentially from 10 milliseconds to at most half a second,
-with jitter taken from the clock and process ID so the R random number stream
-is unchanged. The default of 8 retries adds at most about 1.6 seconds of delay
-to one statement. Before each retry the worker signals \code{canard_conflict_retry};
-see \code{\link[=ca_conditions]{ca_conditions()}}. An exhausted budget propagates the \code{canard_conflict}
-error. Lease loss and ambiguous transport failures are never retried.
+Competing workers pick the same eligible task, and DuckDB aborts the losing
+statement. The worker retries such a statement up to \code{conflict_retries} times,
+backing off from 10 ms to 0.5 s (about 1.6 seconds in total by default),
+repeating only the SQL and never an R callback, and signalling
+\code{canard_conflict_retry} beforehand; see \code{\link[=ca_conditions]{ca_conditions()}}. Jitter comes from
+the clock and process ID, leaving R's random number stream untouched. An
+exhausted budget raises \code{canard_conflict}. Lease loss and transport failures
+are never retried.
 }
